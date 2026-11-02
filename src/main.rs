@@ -1,13 +1,13 @@
 use macroquad::prelude::*;
 use std::collections::VecDeque;
 
-const MW: usize = 192;
-const MH: usize = 108;
-const COLS: usize = 9;
-const ROWS: usize = 6;
+const MW: usize = 360;
+const MH: usize = 200;
+const COLS: usize = 18;
+const ROWS: usize = 10;
 const NC: usize = 6;
-const NAMES: [&str; NC] = ["Westmark", "Aurelia", "Valdoria", "Eastgard", "Krovia", "Sundar"];
 const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
+const NAMES: [&str; NC] = ["Westmark", "Aurelia", "Valdoria", "Eastgard", "Krovia", "Sundar"];
 
 // Countries 0-2 = Allies (player is 0), 3-5 = Axis
 fn at_war(a: usize, b: usize) -> bool {
@@ -29,7 +29,8 @@ struct Prov {
     pos: Vec2,
     owner: usize,
     sea: bool,
-    adj: Vec<usize>,
+    adj: Vec<usize>,     // land borders
+    sea_adj: Vec<usize>, // sea lanes to other continents (slow)
 }
 
 struct Army {
@@ -66,9 +67,52 @@ struct Game {
     toast_t: f32,
 }
 
+fn build_adj(provs: &mut Vec<Prov>, tile: &[usize]) {
+    for p in provs.iter_mut() {
+        p.adj.clear();
+    }
+    for y in 0..MH {
+        for x in 0..MW {
+            let a = tile[y * MW + x];
+            for (nx, ny) in [(x + 1, y), (x, y + 1)] {
+                if nx < MW && ny < MH {
+                    let b = tile[ny * MW + nx];
+                    if a != b && !provs[a].sea && !provs[b].sea && !provs[a].adj.contains(&b) {
+                        provs[a].adj.push(b);
+                        provs[b].adj.push(a);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// continent id per province (usize::MAX for sea) and number of continents
+fn components(provs: &[Prov]) -> (Vec<usize>, usize) {
+    let mut comp = vec![usize::MAX; provs.len()];
+    let mut n = 0;
+    for s in 0..provs.len() {
+        if provs[s].sea || comp[s] != usize::MAX {
+            continue;
+        }
+        let mut st = vec![s];
+        comp[s] = n;
+        while let Some(u) = st.pop() {
+            for &v in &provs[u].adj {
+                if comp[v] == usize::MAX {
+                    comp[v] = n;
+                    st.push(v);
+                }
+            }
+        }
+        n += 1;
+    }
+    (comp, n)
+}
+
 impl Game {
     fn new() -> Game {
-        rand::srand(7);
+        rand::srand(11);
         let mut provs: Vec<Prov> = Vec::new();
         let cw = MW as f32 / COLS as f32;
         let ch = MH as f32 / ROWS as f32;
@@ -76,44 +120,19 @@ impl Game {
             for c in 0..COLS {
                 let x = (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * cw;
                 let y = (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * ch;
-                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: false, adj: vec![] });
+                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: true, adj: vec![], sea_adj: vec![] });
             }
         }
-        // capitals: nearest province to each anchor point
-        let anchors = [(0.15, 0.3), (0.15, 0.75), (0.38, 0.5), (0.85, 0.3), (0.85, 0.75), (0.62, 0.5)];
-        let mut caps: Vec<usize> = vec![];
-        for (ax, ay) in anchors {
-            let t = vec2(ax * MW as f32, ay * MH as f32);
-            let mut best = 0;
-            let mut bd = f32::MAX;
-            for (i, p) in provs.iter().enumerate() {
-                let d = p.pos.distance_squared(t);
-                if d < bd {
-                    bd = d;
-                    best = i;
+        // continents = a few noisy blobs (centre x, centre y, radius as fraction of map width)
+        let blobs = [(0.153, 0.25, 0.105), (0.153, 0.75, 0.105), (0.5, 0.25, 0.105), (0.5, 0.75, 0.105), (0.847, 0.25, 0.105), (0.847, 0.75, 0.105)];
+        for p in provs.iter_mut() {
+            for (bx, by, br) in blobs {
+                let c = vec2(bx * MW as f32, by * MH as f32);
+                let d = p.pos.distance(c) / (br * MW as f32);
+                if d + rand::gen_range(-0.2f32, 0.2f32) < 1.0 {
+                    p.sea = false;
                 }
             }
-            caps.push(best);
-        }
-        for i in 0..provs.len() {
-            if !caps.contains(&i) && rand::gen_range(0, 100) < 9 {
-                provs[i].sea = true;
-            }
-        }
-        for i in 0..provs.len() {
-            if provs[i].sea {
-                continue;
-            }
-            let mut best = 0;
-            let mut bd = f32::MAX;
-            for (k, &c) in caps.iter().enumerate() {
-                let d = provs[i].pos.distance_squared(provs[c].pos);
-                if d < bd {
-                    bd = d;
-                    best = k;
-                }
-            }
-            provs[i].owner = best;
         }
         // pixel -> province lookup
         let mut tile = vec![0usize; MW * MH];
@@ -132,21 +151,101 @@ impl Game {
                 tile[y * MW + x] = best;
             }
         }
-        // adjacency
-        for y in 0..MH {
-            for x in 0..MW {
-                let a = tile[y * MW + x];
-                for (nx, ny) in [(x + 1, y), (x, y + 1)] {
-                    if nx < MW && ny < MH {
-                        let b = tile[ny * MW + nx];
-                        if a != b && !provs[a].sea && !provs[b].sea && !provs[a].adj.contains(&b) {
-                            provs[a].adj.push(b);
-                            provs[b].adj.push(a);
+        build_adj(&mut provs, &tile);
+        // drop tiny islands (fewer than 3 provinces)
+        let (comp, nc) = components(&provs);
+        let mut sizes = vec![0usize; nc];
+        for &c in &comp {
+            if c != usize::MAX {
+                sizes[c] += 1;
+            }
+        }
+        for i in 0..provs.len() {
+            if comp[i] != usize::MAX && sizes[comp[i]] < 3 {
+                provs[i].sea = true;
+            }
+        }
+        build_adj(&mut provs, &tile);
+        let (comp, nc) = components(&provs);
+
+        // sea lanes: connect continents (minimum spanning tree + close neighbours)
+        let mut pairs: Vec<(f32, usize, usize)> = vec![];
+        for i in 0..nc {
+            for j in (i + 1)..nc {
+                let mut best = (f32::MAX, 0, 0);
+                for a in 0..provs.len() {
+                    if comp[a] != i {
+                        continue;
+                    }
+                    for b in 0..provs.len() {
+                        if comp[b] != j {
+                            continue;
+                        }
+                        let d = provs[a].pos.distance(provs[b].pos);
+                        if d < best.0 {
+                            best = (d, a, b);
                         }
                     }
                 }
+                pairs.push(best);
             }
         }
+        pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        let mut group: Vec<usize> = (0..nc).collect();
+        for (d, a, b) in pairs {
+            let (ga, gb) = (group[comp[a]], group[comp[b]]);
+            let close = d < 0.2 * MW as f32;
+            if ga != gb || close {
+                if ga != gb {
+                    for g in group.iter_mut() {
+                        if *g == gb {
+                            *g = ga;
+                        }
+                    }
+                }
+                provs[a].sea_adj.push(b);
+                provs[b].sea_adj.push(a);
+            }
+        }
+
+        // capitals: nearest free land province to each anchor
+        let anchors = [(0.153, 0.25), (0.153, 0.75), (0.5, 0.25), (0.5, 0.75), (0.847, 0.25), (0.847, 0.75)];
+        let mut caps: Vec<usize> = vec![];
+        for (ax, ay) in anchors {
+            let t = vec2(ax * MW as f32, ay * MH as f32);
+            let mut best = usize::MAX;
+            let mut bd = f32::MAX;
+            for (i, p) in provs.iter().enumerate() {
+                if p.sea || caps.contains(&i) {
+                    continue;
+                }
+                let d = p.pos.distance_squared(t);
+                if d < bd {
+                    bd = d;
+                    best = i;
+                }
+            }
+            caps.push(best);
+        }
+        // ownership: nearest capital on the same continent (else nearest overall)
+        for i in 0..provs.len() {
+            if provs[i].sea {
+                continue;
+            }
+            let same: Vec<usize> = (0..NC).filter(|&k| comp[caps[k]] == comp[i]).collect();
+            let cand: Vec<usize> = if same.is_empty() { (0..NC).collect() } else { same };
+            let mut best = cand[0];
+            let mut bd = f32::MAX;
+            for &k in &cand {
+                let d = provs[i].pos.distance_squared(provs[caps[k]].pos);
+                if d < bd {
+                    bd = d;
+                    best = k;
+                }
+            }
+            provs[i].owner = best;
+        }
+
         let cs = (0..NC).map(|_| Country { mp: 60.0, ic: 30.0 }).collect();
         let img = Image::gen_image_color(MW as u16, MH as u16, BLACK);
         let tex = Texture2D::from_image(&img);
@@ -170,7 +269,6 @@ impl Game {
             toast: String::new(),
             toast_t: 0.0,
         };
-        // starting armies
         for c in 0..NC {
             let cap = caps[c];
             g.spawn(c, cap, 15.0);
@@ -229,7 +327,7 @@ impl Game {
                 }
                 return Some(path);
             }
-            for &v in &self.provs[u].adj {
+            for &v in self.provs[u].adj.iter().chain(self.provs[u].sea_adj.iter()) {
                 if !seen[v] && !self.provs[v].sea {
                     seen[v] = true;
                     prev[v] = u;
@@ -321,23 +419,23 @@ impl Game {
                 }
             }
         }
-        // movement (4 days per province, blocked while fighting)
+        // movement: 4 days per land border, 10 days per sea lane, blocked while fighting
         for i in 0..self.armies.len() {
-            if self.armies[i].path.is_empty() {
-                continue;
-            }
             let o = self.armies[i].owner;
             let pv = self.armies[i].prov;
-            let engaged = self.armies.iter().any(|b| b.prov == pv && at_war(o, b.owner));
-            if engaged {
+            let nx = match self.armies[i].path.front() {
+                Some(&n) => n,
+                None => continue,
+            };
+            if self.armies.iter().any(|b| b.prov == pv && at_war(o, b.owner)) {
                 continue;
             }
-            self.armies[i].prog += 0.25;
-            if self.armies[i].prog >= 1.0 {
+            let rate = if self.provs[pv].sea_adj.contains(&nx) { 0.1 } else { 0.25 };
+            self.armies[i].prog += rate;
+            if self.armies[i].prog >= 0.999 {
                 self.armies[i].prog = 0.0;
-                if let Some(nx) = self.armies[i].path.pop_front() {
-                    self.armies[i].prov = nx;
-                }
+                self.armies[i].path.pop_front();
+                self.armies[i].prov = nx;
             }
         }
         // combat
@@ -421,9 +519,8 @@ struct Lay {
     fs: f32,
     top: f32,
     bar: f32,
-    scale: f32,
-    ox: f32,
-    oy: f32,
+    base: f32,
+    avail_h: f32,
 }
 
 fn layout() -> Lay {
@@ -432,11 +529,9 @@ fn layout() -> Lay {
     let fs = (sh / 24.0).clamp(14.0, 48.0);
     let top = fs * 1.8;
     let bar = fs * 3.2;
-    let avail_h = sh - top - bar;
-    let scale = (sw / MW as f32).min(avail_h / MH as f32);
-    let ox = (sw - MW as f32 * scale) / 2.0;
-    let oy = top + (avail_h - MH as f32 * scale) / 2.0;
-    Lay { fs, top, bar, scale, ox, oy }
+    let avail_h = (sh - top - bar).max(1.0);
+    let base = (sw / MW as f32).min(avail_h / MH as f32);
+    Lay { fs, top, bar, base, avail_h }
 }
 
 fn ctext(t: &str, cx: f32, cy: f32, fs: f32, col: Color) {
@@ -446,6 +541,15 @@ fn ctext(t: &str, cx: f32, cy: f32, fs: f32, col: Color) {
 
 fn date(day: u32) -> String {
     format!("{}-{:02}-{:02}", 1936 + day / 360, (day % 360) / 30 + 1, day % 30 + 1)
+}
+
+// bottom bar buttons: PLAY, SPEED, RECRUIT, ZOOM+, ZOOM-
+const BW: [f32; 5] = [1.2, 1.2, 2.2, 0.6, 0.6];
+
+fn button_x(sw: f32, i: usize) -> (f32, f32) {
+    let total: f32 = BW.iter().sum();
+    let x: f32 = BW[..i].iter().sum::<f32>() / total * sw;
+    (x, BW[i] / total * sw)
 }
 
 fn conf() -> Conf {
@@ -460,43 +564,101 @@ fn conf() -> Conf {
 #[macroquad::main(conf)]
 async fn main() {
     let mut g = Game::new();
+    let mut cam = vec2(MW as f32 / 2.0, MH as f32 / 2.0);
+    let mut zoom = 1.0f32;
+    let mut press: Option<(Vec2, Vec2)> = None;
+    let mut moved = false;
+    let mut pinch_prev: Option<f32> = None;
     loop {
         let l = layout();
         let sw = screen_width();
         let sh = screen_height();
         let dt = get_frame_time();
+        let mid_y = l.top + l.avail_h / 2.0;
+        let (mx, my) = mouse_position();
 
         // ---- input ----
-        if is_mouse_button_pressed(MouseButton::Left) {
-            let (mx, my) = mouse_position();
-            if g.result.is_some() {
-                g = Game::new();
-            } else if my > sh - l.bar {
-                let bi = ((mx / (sw / 3.0)) as usize).min(2);
-                match bi {
-                    0 => g.paused = !g.paused,
-                    1 => g.speed_i = (g.speed_i + 1) % SPEEDS.len(),
-                    _ => {
-                        let ok = g.sel_prov.filter(|&p| !g.provs[p].sea && g.provs[p].owner == 0);
-                        match ok {
-                            Some(p) => {
-                                if !g.recruit(0, p) {
-                                    g.say("Need 10 IC + 20 manpower");
-                                }
-                            }
-                            None => g.say("Select one of your provinces"),
+        let (_, wy) = mouse_wheel();
+        if wy != 0.0 {
+            zoom = (zoom * (1.0 + 0.1 * wy.signum())).clamp(1.0, 6.0);
+        }
+        let ts = touches();
+        if ts.len() >= 2 {
+            let d = ts[0].position.distance(ts[1].position);
+            if let Some(pd) = pinch_prev {
+                if pd > 1.0 {
+                    zoom = (zoom * d / pd).clamp(1.0, 6.0);
+                }
+            }
+            pinch_prev = Some(d);
+            press = None;
+        } else {
+            pinch_prev = None;
+            if is_mouse_button_pressed(MouseButton::Left) {
+                if g.result.is_some() {
+                    g = Game::new();
+                    cam = vec2(MW as f32 / 2.0, MH as f32 / 2.0);
+                    zoom = 1.0;
+                } else if my > sh - l.bar {
+                    let mut bi = 0;
+                    for i in 0..5 {
+                        let (x, w) = button_x(sw, i);
+                        if mx >= x && mx < x + w {
+                            bi = i;
                         }
                     }
+                    match bi {
+                        0 => g.paused = !g.paused,
+                        1 => g.speed_i = (g.speed_i + 1) % SPEEDS.len(),
+                        2 => {
+                            let ok = g.sel_prov.filter(|&p| !g.provs[p].sea && g.provs[p].owner == 0);
+                            match ok {
+                                Some(p) => {
+                                    if !g.recruit(0, p) {
+                                        g.say("Need 10 IC + 20 manpower");
+                                    }
+                                }
+                                None => g.say("Select one of your provinces"),
+                            }
+                        }
+                        3 => zoom = (zoom * 1.4).clamp(1.0, 6.0),
+                        _ => zoom = (zoom / 1.4).clamp(1.0, 6.0),
+                    }
+                } else if my > l.top {
+                    press = Some((vec2(mx, my), cam));
+                    moved = false;
                 }
-            } else if my > l.top {
-                let tx = ((mx - l.ox) / l.scale).floor();
-                let ty = ((my - l.oy) / l.scale).floor();
-                if tx >= 0.0 && ty >= 0.0 && (tx as usize) < MW && (ty as usize) < MH {
-                    let p = g.tile[ty as usize * MW + tx as usize];
-                    g.tap_map(p);
+            }
+            if let Some((start, cam0)) = press {
+                let scale = l.base * zoom;
+                if is_mouse_button_down(MouseButton::Left) {
+                    let delta = vec2(mx, my) - start;
+                    if delta.length() > l.fs * 0.4 {
+                        moved = true;
+                    }
+                    if moved {
+                        cam = cam0 - delta / scale;
+                    }
+                }
+                if is_mouse_button_released(MouseButton::Left) {
+                    if !moved {
+                        let tx = ((mx - sw / 2.0) / scale + cam.x).floor();
+                        let ty = ((my - mid_y) / scale + cam.y).floor();
+                        if tx >= 0.0 && ty >= 0.0 && (tx as usize) < MW && (ty as usize) < MH {
+                            let p = g.tile[ty as usize * MW + tx as usize];
+                            g.tap_map(p);
+                        }
+                    }
+                    press = None;
                 }
             }
         }
+        // keep camera inside the map
+        let scale = l.base * zoom;
+        let hw = sw / 2.0 / scale;
+        let hh = l.avail_h / 2.0 / scale;
+        cam.x = if hw >= MW as f32 / 2.0 { MW as f32 / 2.0 } else { cam.x.clamp(hw, MW as f32 - hw) };
+        cam.y = if hh >= MH as f32 / 2.0 { MH as f32 / 2.0 } else { cam.y.clamp(hh, MH as f32 - hh) };
 
         // ---- simulation ----
         if !g.paused && g.result.is_none() {
@@ -517,22 +679,30 @@ async fn main() {
         clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
         draw_texture_ex(
             &g.tex,
-            l.ox,
-            l.oy,
+            sw / 2.0 - cam.x * scale,
+            mid_y - cam.y * scale,
             WHITE,
             DrawTextureParams {
-                dest_size: Some(vec2(MW as f32 * l.scale, MH as f32 * l.scale)),
+                dest_size: Some(vec2(MW as f32 * scale, MH as f32 * scale)),
                 ..Default::default()
             },
         );
-        let to_screen = |p: Vec2| vec2(l.ox + p.x * l.scale, l.oy + p.y * l.scale);
+        let to_screen = |p: Vec2| vec2(sw / 2.0 + (p.x - cam.x) * scale, mid_y + (p.y - cam.y) * scale);
 
-        // selected province marker
+        // sea lanes
+        for (a, pa) in g.provs.iter().enumerate() {
+            for &b in &pa.sea_adj {
+                if a < b {
+                    let s = to_screen(pa.pos);
+                    let e = to_screen(g.provs[b].pos);
+                    draw_line(s.x, s.y, e.x, e.y, 2.0, Color::new(0.5, 0.8, 1.0, 0.55));
+                }
+            }
+        }
         if let Some(p) = g.sel_prov {
             let c = to_screen(g.provs[p].pos);
             draw_circle_lines(c.x, c.y, l.fs * 1.4, 3.0, WHITE);
         }
-        // path of selected army
         if let Some(id) = g.sel_army {
             if let Some(a) = g.armies.iter().find(|a| a.id == id) {
                 let mut prev = to_screen(g.provs[a.prov].pos);
@@ -543,7 +713,6 @@ async fn main() {
                 }
             }
         }
-        // armies
         let (bw, bh) = (l.fs * 2.0, l.fs * 1.2);
         for (i, a) in g.armies.iter().enumerate() {
             let k = g.armies[..i].iter().filter(|b| b.prov == a.prov).count() as f32;
@@ -571,13 +740,7 @@ async fn main() {
             None => "Tap a province".to_string(),
         };
         draw_text(
-            &format!(
-                "{}   MP {:.0}   IC {:.0}   |   {}",
-                date(g.day),
-                g.cs[0].mp,
-                g.cs[0].ic,
-                info
-            ),
+            &format!("{}   MP {:.0}   IC {:.0}   |   {}", date(g.day), g.cs[0].mp, g.cs[0].ic, info),
             l.fs * 0.6,
             l.top * 0.68,
             l.fs,
@@ -589,12 +752,14 @@ async fn main() {
         let labels = [
             if g.paused { "> PLAY".to_string() } else { "|| PAUSE".to_string() },
             format!("SPEED x{}", SPEEDS[g.speed_i] as i32),
-            "RECRUIT (10 IC, 20 MP)".to_string(),
+            "RECRUIT 10IC 20MP".to_string(),
+            "+".to_string(),
+            "-".to_string(),
         ];
         for (i, t) in labels.iter().enumerate() {
-            let x = i as f32 * sw / 3.0 + 4.0;
-            draw_rectangle(x, sh - l.bar + 4.0, sw / 3.0 - 8.0, l.bar - 8.0, Color::new(0.2, 0.22, 0.3, 1.0));
-            ctext(t, x + (sw / 3.0 - 8.0) / 2.0, sh - l.bar / 2.0, l.fs, WHITE);
+            let (x, w) = button_x(sw, i);
+            draw_rectangle(x + 3.0, sh - l.bar + 4.0, w - 6.0, l.bar - 8.0, Color::new(0.2, 0.22, 0.3, 1.0));
+            ctext(t, x + w / 2.0, sh - l.bar / 2.0, l.fs * 0.85, WHITE);
         }
 
         if g.toast_t > 0.0 {
