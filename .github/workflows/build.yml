@@ -1,0 +1,17 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build APK
+        run: |
+          docker run --rm -v "$(pwd)":/root/src -w /root/src notfl3/cargo-apk \
+            cargo quad-apk build --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hoi-clone-apk
+          path: target/android-artifacts/release/apk/*.apk
