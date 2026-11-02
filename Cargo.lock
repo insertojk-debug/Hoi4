@@ -111,7 +111,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "hoi_clone"
+name = "hoiclone"
 version = "0.1.0"
 dependencies = [
  "macroquad",
