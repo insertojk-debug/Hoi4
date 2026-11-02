@@ -1,0 +1,25 @@
+[package]
+name = "hoi_clone"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+macroquad = "=0.4.13"
+
+[profile.release]
+opt-level = 3
+lto = true
+
+[package.metadata.android]
+package_name = "com.example.hoiclone"
+label = "HOI Clone"
+version_code = 1
+version_name = "0.1.0"
+fullscreen = true
+android_version = 29
+target_sdk_version = 29
+min_sdk_version = 26
+build_targets = ["armv7-linux-androideabi", "aarch64-linux-android"]
+
+[package.metadata.android.activity_attributes]
+"android:screenOrientation" = "sensorLandscape"
