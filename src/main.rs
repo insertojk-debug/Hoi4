@@ -487,6 +487,292 @@ impl Game {
                 self.say("Can't move to sea");
                 return;
             }
+            let from = self.armies.iter().find(|a| a.id == id).map(|        for dx in -2..=2i32 {
+                        let (c, r) = (cx + dx, cy + dy);
+                        if c < 0 || r < 0 || c >= COLS as i32 || r >= ROWS as i32 {
+                            continue;
+                        }
+                        let i = r as usize * COLS + c as usize;
+                        let d = provs[i].pos.distance_squared(p);
+                        if d < bd {
+                            bd = d;
+                            best = i;
+                        }
+                    }
+                }
+                tile[y * MW + x] = best as u16;
+            }
+        }
+        for y in 0..MH {
+            for x in 0..MW {
+                let p = tile[y * MW + x] as usize;
+                let b = &mut provs[p].bb;
+                b.0 = b.0.min(x);
+                b.1 = b.1.min(y);
+                b.2 = b.2.max(x);
+                b.3 = b.3.max(y);
+            }
+        }
+        build_adj(&mut provs, &tile);
+        // drop tiny islands (single provinces)
+        let (comp, nc) = components(&provs);
+        let mut sizes = vec![0usize; nc];
+        for &c in &comp {
+            if c != usize::MAX {
+                sizes[c] += 1;
+            }
+        }
+        for i in 0..provs.len() {
+            if comp[i] != usize::MAX && sizes[comp[i]] < 2 {
+                provs[i].sea = true;
+            }
+        }
+        build_adj(&mut provs, &tile);
+        let (comp, nc) = components(&provs);
+
+        // sea lanes: connect continents (minimum spanning tree + close neighbours)
+        let mut members: Vec<Vec<usize>> = vec![vec![]; nc];
+        for (i, &c) in comp.iter().enumerate() {
+            if c != usize::MAX {
+                members[c].push(i);
+            }
+        }
+        let mut pairs: Vec<(f32, usize, usize)> = vec![];
+        for i in 0..nc {
+            for j in (i + 1)..nc {
+                let mut best = (f32::MAX, 0, 0);
+                for &a in &members[i] {
+                    for &b in &members[j] {
+                        let d = provs[a].pos.distance(provs[b].pos);
+                        if d < best.0 {
+                            best = (d, a, b);
+                        }
+                    }
+                }
+                pairs.push(best);
+            }
+        }
+        pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        let mut group: Vec<usize> = (0..nc).collect();
+        for (d, a, b) in pairs {
+            let (ga, gb) = (group[comp[a]], group[comp[b]]);
+            let close = d < 0.07 * MW as f32;
+            if ga != gb || close {
+                if ga != gb {
+                    for g in group.iter_mut() {
+                        if *g == gb {
+                            *g = ga;
+                        }
+                    }
+                }
+                provs[a].sea_adj.push(b);
+                provs[b].sea_adj.push(a);
+            }
+        }
+
+        // capitals: nearest free land province to each anchor
+        let anchors = [
+            (-98.0, 38.0), (-100.0, 58.0), (-52.0, -10.0), (0.0, 47.0), (24.0, -24.0), (134.0, -25.0), (78.0, 22.0),
+            (122.0, 13.0), (110.0, -7.0),
+            (12.0, 51.0), (55.0, 58.0), (110.0, 35.0), (48.0, 31.0), (15.0, 20.0), (-102.0, 22.0), (-65.0, -38.0),
+            (138.0, 36.0), (12.0, 43.0),
+        ];
+        let mut caps: Vec<usize> = vec![];
+        for (lon, lat) in anchors {
+            let t = proj(lon, lat);
+            let mut best = usize::MAX;
+            let mut bd = f32::MAX;
+            for (i, p) in provs.iter().enumerate() {
+                if p.sea || caps.contains(&i) {
+                    continue;
+                }
+                let d = p.pos.distance_squared(t);
+                if d < bd {
+                    bd = d;
+                    best = i;
+                }
+            }
+            caps.push(best);
+        }
+        // ownership: nearest seed (capital or extra claim point) on the same continent, else nearest overall
+        let mut seeds: Vec<(usize, usize)> = (0..NC).map(|k| (k, caps[k])).collect();
+        let extras = [(10usize, 100.0f32, 62.0f32), (10, 140.0, 64.0), (10, 75.0, 66.0), (1, -130.0, 62.0), (11, 95.0, 36.0)];
+        for (k, lon, lat) in extras {
+            let t = proj(lon, lat);
+            let mut best = usize::MAX;
+            let mut bd = f32::MAX;
+            for (i, p) in provs.iter().enumerate() {
+                if p.sea {
+                    continue;
+                }
+                let d = p.pos.distance_squared(t);
+                if d < bd {
+                    bd = d;
+                    best = i;
+                }
+            }
+            seeds.push((k, best));
+        }
+        for i in 0..provs.len() {
+            if provs[i].sea {
+                continue;
+            }
+            let same: Vec<&(usize, usize)> = seeds.iter().filter(|sd| comp[sd.1] == comp[i]).collect();
+            let cand: Vec<&(usize, usize)> = if same.is_empty() { seeds.iter().collect() } else { same };
+            let mut best = cand[0].0;
+            let mut bd = f32::MAX;
+            for sd in cand {
+                let d = provs[i].pos.distance(provs[sd.1].pos) / W[sd.0];
+                if d < bd {
+                    bd = d;
+                    best = sd.0;
+                }
+            }
+            provs[i].owner = best;
+        }
+
+        let cs = (0..NC).map(|_| Country { mp: 100.0, ic: 60.0 }).collect();
+        let img = Image::gen_image_color(MW as u16, MH as u16, BLACK);
+        let tex = Texture2D::from_image(&img);
+        tex.set_filter(FilterMode::Nearest);
+        let mut g = Game {
+            provs,
+            tile,
+            changed: vec![],
+            cs,
+            armies: vec![],
+            next_id: 1,
+            day: 0,
+            acc: 0.0,
+            paused: true,
+            speed_i: 0,
+            sel_army: None,
+            sel_prov: None,
+            img,
+            tex,
+            dirty: true,
+            result: None,
+            toast: String::new(),
+            toast_t: 0.0,
+        };
+        for c in 0..NC {
+            let owned: Vec<usize> = (0..g.provs.len()).filter(|&i| !g.provs[i].sea && g.provs[i].owner == c).collect();
+            g.spawn(c, caps[c], 15.0);
+            for _ in 0..(owned.len() / 8).max(1) {
+                let p = owned[rand::gen_range(0, owned.len())];
+                g.spawn(c, p, 10.0);
+            }
+        }
+        g.recolor_all();
+        g
+    }
+
+    fn spawn(&mut self, owner: usize, prov: usize, size: f32) {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.armies.push(Army { id, owner, size, prov, path: VecDeque::new(), prog: 0.0 });
+    }
+
+    fn paint_prov(&mut self, p: usize) {
+        let (x0, y0, x1, y1) = self.provs[p].bb;
+        let sea = self.provs[p].sea;
+        let base = if sea { Color::new(0.08, 0.14, 0.28, 1.0) } else { country_color(self.provs[p].owner) };
+        let dark = Color::new(base.r * 0.5, base.g * 0.5, base.b * 0.5, 1.0);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if self.tile[y * MW + x] as usize != p {
+                    continue;
+                }
+                let mut col = base;
+                if !sea {
+                    let r = x + 1 < MW && self.tile[y * MW + x + 1] as usize != p;
+                    let d = y + 1 < MH && self.tile[(y + 1) * MW + x] as usize != p;
+                    if r || d {
+                        col = dark;
+                    }
+                }
+                self.img.set_pixel(x as u32, y as u32, col);
+            }
+        }
+    }
+
+    fn recolor_all(&mut self) {
+        for p in 0..self.provs.len() {
+            self.paint_prov(p);
+        }
+        self.tex.update(&self.img);
+        self.changed.clear();
+        self.dirty = false;
+    }
+
+    fn flush(&mut self) {
+        let ch = std::mem::take(&mut self.changed);
+        for p in ch {
+            self.paint_prov(p);
+        }
+        self.tex.update(&self.img);
+        self.dirty = false;
+    }
+
+    fn bfs(&self, from: usize, goal: impl Fn(usize) -> bool) -> Option<VecDeque<usize>> {
+        let n = self.provs.len();
+        let mut prev = vec![usize::MAX; n];
+        let mut seen = vec![false; n];
+        let mut q = VecDeque::new();
+        q.push_back(from);
+        seen[from] = true;
+        while let Some(u) = q.pop_front() {
+            if u != from && goal(u) {
+                let mut path = VecDeque::new();
+                let mut c = u;
+                while c != from {
+                    path.push_front(c);
+                    c = prev[c];
+                }
+                return Some(path);
+            }
+            for &v in self.provs[u].adj.iter().chain(self.provs[u].sea_adj.iter()) {
+                if !seen[v] && !self.provs[v].sea {
+                    seen[v] = true;
+                    prev[v] = u;
+                    q.push_back(v);
+                }
+            }
+        }
+        None
+    }
+
+    fn recruit(&mut self, c: usize, p: usize) -> bool {
+        if self.cs[c].ic < 10.0 || self.cs[c].mp < 20.0 {
+            return false;
+        }
+        self.cs[c].ic -= 10.0;
+        self.cs[c].mp -= 20.0;
+        if let Some(a) = self.armies.iter_mut().find(|a| a.owner == c && a.prov == p && a.path.is_empty()) {
+            a.size += 10.0;
+        } else {
+            self.spawn(c, p, 10.0);
+        }
+        true
+    }
+
+    fn say(&mut self, s: &str) {
+        self.toast = s.to_string();
+        self.toast_t = 2.0;
+    }
+
+    fn tap_map(&mut self, p: usize) {
+        let own_here = self.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
+        if let Some(id) = own_here {
+            self.sel_army = if self.sel_army == Some(id) { None } else { Some(id) };
+            self.sel_prov = Some(p);
+            return;
+        }
+        if let Some(id) = self.sel_army {
+            if self.provs[p].sea {
+                self.say("Can't move to sea");
+                return;
+            }
             let from = self.armies.iter().find(|a| a.id == id).map(| continue;
                     }
                     for b in 0..provs.len() {
