@@ -1,28 +1,29 @@
 use macroquad::prelude::*;
 use std::collections::VecDeque;
 
-const MW: usize = 720;
-const MH: usize = 360;
-const COLS: usize = 36;
-const ROWS: usize = 18;
-const NC: usize = 14;
+const MW: usize = 1200;
+const MH: usize = 600;
+const COLS: usize = 80;
+const ROWS: usize = 40;
+const NC: usize = 18;
+const CELL: f32 = 15.0;
 const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
 const NAMES: [&str; NC] = [
-    "United States", "Canada", "Brazil", "Albion", "South Africa", "Australia", "India",
-    "Germany", "Russia", "China", "Persia", "Egypt", "Mexico", "Argentina",
+    "United States", "Canada", "Brazil", "Albion", "South Africa", "Australia", "India", "Philippines", "Indonesia",
+    "Germany", "Russia", "China", "Persia", "Egypt", "Mexico", "Argentina", "Japan", "Italy",
 ];
 
-// Countries 0-6 = Allies (player is 0), 7-13 = Axis
+// Countries 0-8 = Allies (player is 0), 9-17 = Axis
 fn at_war(a: usize, b: usize) -> bool {
-    a < NC && b < NC && a / 7 != b / 7
+    a < NC && b < NC && a / 9 != b / 9
 }
 
 fn country_color(c: usize) -> Color {
     const P: [(f32, f32, f32); NC] = [
         (0.25, 0.45, 0.95), (0.55, 0.75, 0.95), (0.35, 0.75, 0.40), (0.20, 0.70, 0.75),
-        (0.55, 0.40, 0.85), (0.45, 0.85, 0.60), (0.30, 0.55, 0.80),
-        (0.85, 0.25, 0.25), (0.70, 0.15, 0.20), (0.90, 0.60, 0.20), (0.85, 0.45, 0.65),
-        (0.65, 0.35, 0.25), (0.90, 0.80, 0.25), (0.75, 0.55, 0.35),
+        (0.55, 0.40, 0.85), (0.45, 0.85, 0.60), (0.30, 0.55, 0.80), (0.60, 0.85, 0.30), (0.40, 0.30, 0.70),
+        (0.85, 0.25, 0.25), (0.70, 0.15, 0.20), (0.90, 0.60, 0.20), (0.85, 0.45, 0.65), (0.65, 0.35, 0.25),
+        (0.90, 0.80, 0.25), (0.75, 0.55, 0.35), (0.95, 0.95, 0.95), (0.55, 0.20, 0.45),
     ];
     let (r, g, b) = P[c.min(NC - 1)];
     Color::new(r, g, b, 1.0)
@@ -32,20 +33,32 @@ fn country_color(c: usize) -> Color {
 const NAMERICA: &[(f32, f32)] = &[(-168.0,66.0),(-156.0,71.0),(-130.0,70.0),(-100.0,72.0),(-80.0,73.0),(-62.0,60.0),(-56.0,52.0),(-66.0,45.0),(-70.0,42.0),(-76.0,36.0),(-81.0,31.0),(-80.0,25.0),(-83.0,29.0),(-90.0,30.0),(-97.0,26.0),(-97.0,20.0),(-88.0,21.0),(-87.0,16.0),(-83.0,10.0),(-78.0,8.0),(-82.0,7.0),(-86.0,11.0),(-92.0,14.0),(-105.0,20.0),(-110.0,24.0),(-117.0,32.0),(-124.0,40.0),(-124.0,48.0),(-135.0,58.0),(-148.0,61.0),(-158.0,58.0),(-165.0,60.0)];
 const GREENLAND: &[(f32, f32)] = &[(-55.0,60.0),(-42.0,60.0),(-22.0,70.0),(-20.0,78.0),(-35.0,83.0),(-60.0,80.0),(-58.0,72.0)];
 const SAMERICA: &[(f32, f32)] = &[(-78.0,8.0),(-72.0,12.0),(-62.0,10.0),(-52.0,5.0),(-50.0,0.0),(-35.0,-5.0),(-35.0,-9.0),(-40.0,-20.0),(-48.0,-26.0),(-58.0,-35.0),(-62.0,-40.0),(-66.0,-46.0),(-69.0,-52.0),(-75.0,-48.0),(-73.0,-38.0),(-71.0,-30.0),(-70.0,-18.0),(-76.0,-14.0),(-81.0,-5.0),(-80.0,0.0),(-77.0,4.0)];
-const EURASIA: &[(f32, f32)] = &[(-10.0,36.0),(-10.0,44.0),(-2.0,44.0),(-5.0,48.0),(3.0,51.0),(8.0,54.0),(10.0,57.0),(14.0,55.0),(22.0,55.0),(24.0,60.0),(30.0,60.0),(20.0,70.0),(30.0,71.0),(40.0,68.0),(60.0,69.0),(70.0,73.0),(90.0,77.0),(115.0,77.0),(140.0,72.0),(160.0,70.0),(170.0,67.0),(170.0,60.0),(160.0,53.0),(155.0,58.0),(143.0,59.0),(135.0,54.0),(140.0,47.0),(130.0,42.0),(129.0,35.0),(126.0,35.0),(124.0,40.0),(121.0,39.0),(122.0,31.0),(120.0,25.0),(110.0,21.0),(106.0,10.0),(104.0,1.0),(100.0,6.0),(98.0,16.0),(93.0,20.0),(89.0,22.0),(80.0,15.0),(77.0,8.0),(73.0,17.0),(72.0,22.0),(67.0,25.0),(57.0,25.0),(56.0,27.0),(50.0,30.0),(48.0,29.0),(55.0,24.0),(58.0,23.0),(52.0,16.0),(44.0,12.0),(40.0,17.0),(35.0,28.0),(34.0,31.0),(36.0,36.0),(27.0,36.0),(23.0,36.5),(19.0,40.0),(15.0,38.0),(12.0,42.0),(9.0,44.0),(3.0,43.0),(0.0,39.0),(-5.0,36.0)];
+const EURASIA: &[(f32, f32)] = &[(-10.0,36.0),(-10.0,44.0),(-2.0,44.0),(-5.0,48.0),(3.0,51.0),(8.0,54.0),(10.0,57.0),(14.0,55.0),(22.0,55.0),(24.0,60.0),(30.0,60.0),(20.0,70.0),(30.0,71.0),(40.0,68.0),(60.0,69.0),(70.0,73.0),(90.0,77.0),(115.0,77.0),(140.0,72.0),(160.0,70.0),(170.0,67.0),(170.0,60.0),(160.0,53.0),(155.0,58.0),(143.0,59.0),(136.0,54.0),(137.0,48.0),(131.0,43.0),(129.0,35.0),(126.0,35.0),(124.0,40.0),(121.0,39.0),(122.0,31.0),(120.0,25.0),(110.0,21.0),(106.0,10.0),(104.0,1.0),(100.0,6.0),(98.0,16.0),(93.0,20.0),(89.0,22.0),(80.0,15.0),(77.0,8.0),(73.0,17.0),(72.0,22.0),(67.0,25.0),(57.0,25.0),(56.0,27.0),(50.0,30.0),(48.0,29.0),(55.0,24.0),(58.0,23.0),(52.0,16.0),(44.0,12.0),(40.0,17.0),(35.0,28.0),(34.0,31.0),(36.0,36.0),(27.0,36.0),(23.0,36.5),(19.0,40.0),(15.0,38.0),(12.0,42.0),(9.0,44.0),(3.0,43.0),(0.0,39.0),(-5.0,36.0)];
 const AFRICA: &[(f32, f32)] = &[(-17.0,21.0),(-10.0,30.0),(-6.0,36.0),(10.0,37.0),(11.0,33.0),(20.0,32.0),(32.0,31.5),(34.0,28.0),(37.0,18.0),(43.0,12.0),(51.0,12.0),(46.0,3.0),(40.0,-5.0),(40.0,-15.0),(35.0,-24.0),(32.0,-29.0),(27.0,-34.0),(20.0,-35.0),(18.0,-30.0),(12.0,-17.0),(13.0,-8.0),(9.0,-1.0),(9.0,4.0),(5.0,5.0),(-8.0,4.0),(-13.0,8.0),(-17.0,14.0)];
 const AUSTRALIA: &[(f32, f32)] = &[(114.0,-22.0),(122.0,-18.0),(130.0,-12.0),(137.0,-12.0),(142.0,-11.0),(146.0,-19.0),(153.0,-26.0),(150.0,-37.0),(141.0,-38.0),(130.0,-32.0),(116.0,-35.0),(114.0,-26.0)];
 const INDONESIA: &[(f32, f32)] = &[(96.0,4.0),(106.0,-6.0),(114.0,-8.0),(130.0,-8.0),(141.0,-3.0),(135.0,-1.0),(120.0,1.0),(110.0,3.0)];
-const JAPAN: &[(f32, f32)] = &[(130.0,32.0),(131.0,37.0),(137.0,38.0),(141.0,42.0),(142.0,45.0),(145.0,43.0),(141.0,36.0),(135.0,33.0)];
+const JAPAN: &[(f32, f32)] = &[(129.5,32.0),(131.0,37.0),(136.0,38.5),(140.0,41.0),(142.5,41.0),(142.0,38.0),(140.5,35.5),(135.0,33.0)];
 const BRITAIN: &[(f32, f32)] = &[(-6.0,50.0),(-6.0,57.0),(-3.0,59.0),(0.0,57.0),(2.0,52.0),(1.0,51.0)];
-const LAND: &[&[(f32, f32)]] = &[NAMERICA, GREENLAND, SAMERICA, EURASIA, AFRICA, AUSTRALIA, INDONESIA, JAPAN, BRITAIN];
+const PHILIPPINES: &[(f32, f32)] = &[(118.5,19.0),(123.5,19.0),(126.5,10.0),(127.0,6.0),(121.0,5.5),(118.0,9.0),(119.5,14.0)];
+const MADAGASCAR: &[(f32, f32)] = &[(44.0,-13.0),(50.0,-15.0),(47.0,-25.0),(43.0,-23.0)];
+const NEWZEALAND: &[(f32, f32)] = &[(172.0,-34.5),(178.5,-37.5),(175.0,-41.5),(173.0,-46.0),(167.0,-46.0),(172.0,-41.0)];
+const ICELAND: &[(f32, f32)] = &[(-24.0,63.5),(-13.0,63.5),(-13.0,66.5),(-24.0,66.5)];
+const IRELAND: &[(f32, f32)] = &[(-10.5,51.5),(-6.0,51.5),(-6.0,55.0),(-10.5,55.0)];
+const BORNEO: &[(f32, f32)] = &[(109.0,2.0),(117.0,7.0),(119.0,1.0),(116.0,-4.0),(110.0,-3.0)];
+const NEWGUINEA: &[(f32, f32)] = &[(131.0,-1.0),(141.0,-3.0),(150.0,-10.0),(141.0,-9.0),(135.0,-4.0)];
+const CUBA: &[(f32, f32)] = &[(-85.0,22.0),(-74.0,20.0),(-77.0,23.0)];
+const LAND: &[&[(f32, f32)]] = &[NAMERICA, GREENLAND, SAMERICA, EURASIA, AFRICA, AUSTRALIA, INDONESIA, JAPAN, BRITAIN, PHILIPPINES, MADAGASCAR, NEWZEALAND, ICELAND, IRELAND, BORNEO, NEWGUINEA, CUBA];
 const HUDSON: &[(f32, f32)] = &[(-95.0,58.0),(-95.0,63.0),(-85.0,64.0),(-78.0,62.0),(-78.0,52.0),(-86.0,53.0)];
 const BLACKSEA: &[(f32, f32)] = &[(28.0,42.0),(28.0,46.0),(38.0,47.0),(41.0,42.0),(34.0,41.5)];
 const CASPIAN: &[(f32, f32)] = &[(47.0,37.0),(47.0,46.0),(54.0,46.0),(54.0,37.0)];
-const SEAS: &[&[(f32, f32)]] = &[HUDSON, BLACKSEA, CASPIAN];
+const BALTIC: &[(f32, f32)] = &[(10.0,54.0),(14.0,54.5),(22.0,55.0),(24.0,59.0),(30.0,60.0),(26.0,65.0),(22.0,65.0),(17.0,62.0),(17.0,57.0),(12.0,56.0)];
+const SEAS: &[&[(f32, f32)]] = &[HUDSON, BLACKSEA, CASPIAN, BALTIC];
+
+// territory weight per country (bigger = claims more land)
+const W: [f32; NC] = [1.15, 0.85, 1.0, 1.25, 1.0, 1.0, 1.05, 1.2, 1.0, 1.25, 0.9, 1.0, 1.0, 0.9, 1.25, 1.1, 1.0, 1.3];
 
 fn proj(lon: f32, lat: f32) -> Vec2 {
-    vec2((lon + 170.0) / 340.0 * MW as f32, (75.0 - lat) / 133.0 * MH as f32)
+    vec2((lon + 170.0) / 350.0 * MW as f32, (75.0 - lat) / 133.0 * MH as f32)
 }
 
 fn inside(poly: &[Vec2], p: Vec2) -> bool {
@@ -65,6 +78,7 @@ struct Prov {
     pos: Vec2,
     owner: usize,
     sea: bool,
+    bb: (usize, usize, usize, usize), // bounding box in tiles: x0,y0,x1,y1
     adj: Vec<usize>,     // land borders
     sea_adj: Vec<usize>, // sea lanes to other continents (slow)
 }
@@ -85,7 +99,8 @@ struct Country {
 
 struct Game {
     provs: Vec<Prov>,
-    tile: Vec<usize>,
+    tile: Vec<u16>,
+    changed: Vec<usize>,
     cs: Vec<Country>,
     armies: Vec<Army>,
     next_id: u32,
@@ -103,16 +118,16 @@ struct Game {
     toast_t: f32,
 }
 
-fn build_adj(provs: &mut Vec<Prov>, tile: &[usize]) {
+fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
     for p in provs.iter_mut() {
         p.adj.clear();
     }
     for y in 0..MH {
         for x in 0..MW {
-            let a = tile[y * MW + x];
+            let a = tile[y * MW + x] as usize;
             for (nx, ny) in [(x + 1, y), (x, y + 1)] {
                 if nx < MW && ny < MH {
-                    let b = tile[ny * MW + nx];
+                    let b = tile[ny * MW + nx] as usize;
                     if a != b && !provs[a].sea && !provs[b].sea && !provs[a].adj.contains(&b) {
                         provs[a].adj.push(b);
                         provs[b].adj.push(a);
@@ -156,14 +171,14 @@ impl Game {
             for c in 0..COLS {
                 let x = (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * cw;
                 let y = (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * ch;
-                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: true, adj: vec![], sea_adj: vec![] });
+                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: true, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
             }
         }
         // land = province whose centre (and mostly its surroundings) lies inside a continent outline
         let to_poly = |ps: &[(f32, f32)]| -> Vec<Vec2> { ps.iter().map(|&(a, b)| proj(a, b)).collect() };
         let land_polys: Vec<Vec<Vec2>> = LAND.iter().map(|p| to_poly(p)).collect();
         let sea_polys: Vec<Vec<Vec2>> = SEAS.iter().map(|p| to_poly(p)).collect();
-        let offs = [vec2(0.0, 0.0), vec2(-7.0, -7.0), vec2(7.0, -7.0), vec2(-7.0, 7.0), vec2(7.0, 7.0)];
+        let offs = [vec2(0.0, 0.0), vec2(-4.5, -4.5), vec2(4.5, -4.5), vec2(-4.5, 4.5), vec2(4.5, 4.5)];
         for p in provs.iter_mut() {
             let mut cnt = 0;
             for o in offs {
@@ -172,12 +187,12 @@ impl Game {
                     cnt += 1;
                 }
             }
-            if cnt >= 3 {
+            if cnt >= 2 {
                 p.sea = false;
             }
         }
         // pixel -> province lookup (seeds are a jittered grid, so only nearby cells matter)
-        let mut tile = vec![0usize; MW * MH];
+        let mut tile = vec![0u16; MW * MH];
         for y in 0..MH {
             for x in 0..MW {
                 let p = vec2(x as f32 + 0.5, y as f32 + 0.5);
@@ -199,7 +214,17 @@ impl Game {
                         }
                     }
                 }
-                tile[y * MW + x] = best;
+                tile[y * MW + x] = best as u16;
+            }
+        }
+        for y in 0..MH {
+            for x in 0..MW {
+                let p = tile[y * MW + x] as usize;
+                let b = &mut provs[p].bb;
+                b.0 = b.0.min(x);
+                b.1 = b.1.min(y);
+                b.2 = b.2.max(x);
+                b.3 = b.3.max(y);
             }
         }
         build_adj(&mut provs, &tile);
@@ -220,13 +245,249 @@ impl Game {
         let (comp, nc) = components(&provs);
 
         // sea lanes: connect continents (minimum spanning tree + close neighbours)
+        let mut members: Vec<Vec<usize>> = vec![vec![]; nc];
+        for (i, &c) in comp.iter().enumerate() {
+            if c != usize::MAX {
+                members[c].push(i);
+            }
+        }
         let mut pairs: Vec<(f32, usize, usize)> = vec![];
         for i in 0..nc {
             for j in (i + 1)..nc {
                 let mut best = (f32::MAX, 0, 0);
-                for a in 0..provs.len() {
-                    if comp[a] != i {
-                        continue;
+                for &a in &members[i] {
+                    for &b in &members[j] {
+                        let d = provs[a].pos.distance(provs[b].pos);
+                        if d < best.0 {
+                            best = (d, a, b);
+                        }
+                    }
+                }
+                pairs.push(best);
+            }
+        }
+        pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
+        let mut group: Vec<usize> = (0..nc).collect();
+        for (d, a, b) in pairs {
+            let (ga, gb) = (group[comp[a]], group[comp[b]]);
+            let close = d < 0.07 * MW as f32;
+            if ga != gb || close {
+                if ga != gb {
+                    for g in group.iter_mut() {
+                        if *g == gb {
+                            *g = ga;
+                        }
+                    }
+                }
+                provs[a].sea_adj.push(b);
+                provs[b].sea_adj.push(a);
+            }
+        }
+
+        // capitals: nearest free land province to each anchor
+        let anchors = [
+            (-98.0, 38.0), (-100.0, 58.0), (-52.0, -10.0), (0.0, 47.0), (24.0, -24.0), (134.0, -25.0), (78.0, 22.0),
+            (122.0, 13.0), (110.0, -7.0),
+            (12.0, 51.0), (55.0, 58.0), (110.0, 35.0), (48.0, 31.0), (15.0, 20.0), (-102.0, 22.0), (-65.0, -38.0),
+            (138.0, 36.0), (12.0, 43.0),
+        ];
+        let mut caps: Vec<usize> = vec![];
+        for (lon, lat) in anchors {
+            let t = proj(lon, lat);
+            let mut best = usize::MAX;
+            let mut bd = f32::MAX;
+            for (i, p) in provs.iter().enumerate() {
+                if p.sea || caps.contains(&i) {
+                    continue;
+                }
+                let d = p.pos.distance_squared(t);
+                if d < bd {
+                    bd = d;
+                    best = i;
+                }
+            }
+            caps.push(best);
+        }
+        // ownership: nearest seed (capital or extra claim point) on the same continent, else nearest overall
+        let mut seeds: Vec<(usize, usize)> = (0..NC).map(|k| (k, caps[k])).collect();
+        let extras = [(10usize, 100.0f32, 62.0f32), (10, 140.0, 64.0), (10, 75.0, 66.0), (1, -130.0, 62.0), (11, 95.0, 36.0)];
+        for (k, lon, lat) in extras {
+            let t = proj(lon, lat);
+            let mut best = usize::MAX;
+            let mut bd = f32::MAX;
+            for (i, p) in provs.iter().enumerate() {
+                if p.sea {
+                    continue;
+                }
+                let d = p.pos.distance_squared(t);
+                if d < bd {
+                    bd = d;
+                    best = i;
+                }
+            }
+            seeds.push((k, best));
+        }
+        for i in 0..provs.len() {
+            if provs[i].sea {
+                continue;
+            }
+            let same: Vec<&(usize, usize)> = seeds.iter().filter(|sd| comp[sd.1] == comp[i]).collect();
+            let cand: Vec<&(usize, usize)> = if same.is_empty() { seeds.iter().collect() } else { same };
+            let mut best = cand[0].0;
+            let mut bd = f32::MAX;
+            for sd in cand {
+                let d = provs[i].pos.distance(provs[sd.1].pos) / W[sd.0];
+                if d < bd {
+                    bd = d;
+                    best = sd.0;
+                }
+            }
+            provs[i].owner = best;
+        }
+
+        let cs = (0..NC).map(|_| Country { mp: 100.0, ic: 60.0 }).collect();
+        let img = Image::gen_image_color(MW as u16, MH as u16, BLACK);
+        let tex = Texture2D::from_image(&img);
+        tex.set_filter(FilterMode::Nearest);
+        let mut g = Game {
+            provs,
+            tile,
+            changed: vec![],
+            cs,
+            armies: vec![],
+            next_id: 1,
+            day: 0,
+            acc: 0.0,
+            paused: true,
+            speed_i: 0,
+            sel_army: None,
+            sel_prov: None,
+            img,
+            tex,
+            dirty: true,
+            result: None,
+            toast: String::new(),
+            toast_t: 0.0,
+        };
+        for c in 0..NC {
+            let owned: Vec<usize> = (0..g.provs.len()).filter(|&i| !g.provs[i].sea && g.provs[i].owner == c).collect();
+            g.spawn(c, caps[c], 15.0);
+            for _ in 0..(owned.len() / 8).max(1) {
+                let p = owned[rand::gen_range(0, owned.len())];
+                g.spawn(c, p, 10.0);
+            }
+        }
+        g.recolor_all();
+        g
+    }
+
+    fn spawn(&mut self, owner: usize, prov: usize, size: f32) {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.armies.push(Army { id, owner, size, prov, path: VecDeque::new(), prog: 0.0 });
+    }
+
+    fn paint_prov(&mut self, p: usize) {
+        let (x0, y0, x1, y1) = self.provs[p].bb;
+        let sea = self.provs[p].sea;
+        let base = if sea { Color::new(0.08, 0.14, 0.28, 1.0) } else { country_color(self.provs[p].owner) };
+        let dark = Color::new(base.r * 0.5, base.g * 0.5, base.b * 0.5, 1.0);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                if self.tile[y * MW + x] as usize != p {
+                    continue;
+                }
+                let mut col = base;
+                if !sea {
+                    let r = x + 1 < MW && self.tile[y * MW + x + 1] as usize != p;
+                    let d = y + 1 < MH && self.tile[(y + 1) * MW + x] as usize != p;
+                    if r || d {
+                        col = dark;
+                    }
+                }
+                self.img.set_pixel(x as u32, y as u32, col);
+            }
+        }
+    }
+
+    fn recolor_all(&mut self) {
+        for p in 0..self.provs.len() {
+            self.paint_prov(p);
+        }
+        self.tex.update(&self.img);
+        self.changed.clear();
+        self.dirty = false;
+    }
+
+    fn flush(&mut self) {
+        let ch = std::mem::take(&mut self.changed);
+        for p in ch {
+            self.paint_prov(p);
+        }
+        self.tex.update(&self.img);
+        self.dirty = false;
+    }
+
+    fn bfs(&self, from: usize, goal: impl Fn(usize) -> bool) -> Option<VecDeque<usize>> {
+        let n = self.provs.len();
+        let mut prev = vec![usize::MAX; n];
+        let mut seen = vec![false; n];
+        let mut q = VecDeque::new();
+        q.push_back(from);
+        seen[from] = true;
+        while let Some(u) = q.pop_front() {
+            if u != from && goal(u) {
+                let mut path = VecDeque::new();
+                let mut c = u;
+                while c != from {
+                    path.push_front(c);
+                    c = prev[c];
+                }
+                return Some(path);
+            }
+            for &v in self.provs[u].adj.iter().chain(self.provs[u].sea_adj.iter()) {
+                if !seen[v] && !self.provs[v].sea {
+                    seen[v] = true;
+                    prev[v] = u;
+                    q.push_back(v);
+                }
+            }
+        }
+        None
+    }
+
+    fn recruit(&mut self, c: usize, p: usize) -> bool {
+        if self.cs[c].ic < 10.0 || self.cs[c].mp < 20.0 {
+            return false;
+        }
+        self.cs[c].ic -= 10.0;
+        self.cs[c].mp -= 20.0;
+        if let Some(a) = self.armies.iter_mut().find(|a| a.owner == c && a.prov == p && a.path.is_empty()) {
+            a.size += 10.0;
+        } else {
+            self.spawn(c, p, 10.0);
+        }
+        true
+    }
+
+    fn say(&mut self, s: &str) {
+        self.toast = s.to_string();
+        self.toast_t = 2.0;
+    }
+
+    fn tap_map(&mut self, p: usize) {
+        let own_here = self.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
+        if let Some(id) = own_here {
+            self.sel_army = if self.sel_army == Some(id) { None } else { Some(id) };
+            self.sel_prov = Some(p);
+            return;
+        }
+        if let Some(id) = self.sel_army {
+            if self.provs[p].sea {
+                self.say("Can't move to sea");
+                return;
+            }
+            let from = self.armies.iter().find(|a| a.id == id).map(| continue;
                     }
                     for b in 0..provs.len() {
                         if comp[b] != j {
