@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
 
-use crate::coast::{LAND, SEAS};
+use crate::coast::*;
 use crate::game::*;
 use crate::world::*;
 
@@ -21,6 +21,37 @@ fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
                 }
             }
         }
+    }
+}
+
+fn lon_of(p: Vec2) -> f32 {
+    p.x / MW as f32 * 350.0 - 170.0
+}
+
+// may two neighbouring provinces from outlines ra / rb be linked by land?
+fn linked(ra: usize, rb: usize, pa: Vec2, pb: Vec2) -> bool {
+    if ra == rb {
+        return true;
+    }
+    let pair = |x: usize, y: usize| (ra == x && rb == y) || (ra == y && rb == x);
+    if pair(R_NAMERICA, R_SAMERICA) || pair(R_NAMERICA, R_BAJA) {
+        return true;
+    }
+    if pair(R_EURASIA, R_AFRICA) {
+        return lon_of(pa) >= 30.0 && lon_of(pb) >= 30.0; // only at Suez / Sinai
+    }
+    false
+}
+
+fn cut_regions(provs: &mut Vec<Prov>, region: &[u8]) {
+    for a in 0..provs.len() {
+        let pa = provs[a].pos;
+        let adj = std::mem::take(&mut provs[a].adj);
+        let keep: Vec<usize> = adj
+            .into_iter()
+            .filter(|&b| linked(region[a] as usize, region[b] as usize, pa, provs[b].pos))
+            .collect();
+        provs[a].adj = keep;
     }
 }
 
@@ -81,16 +112,29 @@ impl Game {
         let land_polys: Vec<Vec<Vec2>> = LAND.iter().map(|p| to_poly(p)).collect();
         let sea_polys: Vec<Vec<Vec2>> = SEAS.iter().map(|p| to_poly(p)).collect();
         let offs = [vec2(0.0, 0.0), vec2(-4.5, -4.5), vec2(4.5, -4.5), vec2(-4.5, 4.5), vec2(4.5, 4.5)];
-        for p in provs.iter_mut() {
+        let mut region = vec![255u8; provs.len()];
+        for (idx, p) in provs.iter_mut().enumerate() {
             let mut cnt = 0;
+            let mut hits = vec![0u8; land_polys.len()];
             for o in offs {
                 let q = p.pos + o;
-                if land_polys.iter().any(|pl| inside(pl, q)) && !sea_polys.iter().any(|pl| inside(pl, q)) {
+                if sea_polys.iter().any(|pl| inside(pl, q)) {
+                    continue;
+                }
+                if let Some(k) = land_polys.iter().position(|pl| inside(pl, q)) {
+                    hits[k] += 1;
                     cnt += 1;
                 }
             }
             if cnt >= 2 {
                 p.sea = false;
+                let mut best = 0;
+                for k in 0..hits.len() {
+                    if hits[k] > hits[best] {
+                        best = k;
+                    }
+                }
+                region[idx] = best as u8;
             }
         }
         // pixel -> province lookup (seeds are a jittered grid, so only nearby cells matter)
@@ -125,6 +169,7 @@ impl Game {
             }
         }
         build_adj(&mut provs, &tile);
+        cut_regions(&mut provs, &region);
         // drop single-province islands
         let (comp, nc) = components(&provs);
         let mut sizes = vec![0usize; nc];
@@ -139,6 +184,7 @@ impl Game {
             }
         }
         build_adj(&mut provs, &tile);
+        cut_regions(&mut provs, &region);
         let (comp, nc) = components(&provs);
 
         // sea lanes: connect continents (minimum spanning tree + close neighbours)
@@ -165,17 +211,31 @@ impl Game {
         }
         pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
         let mut group: Vec<usize> = (0..nc).collect();
+        let mut deg = vec![0usize; nc];
         for (d, a, b) in pairs {
-            let (ga, gb) = (group[comp[a]], group[comp[b]]);
-            let close = d < 0.05 * MW as f32;
-            if ga != gb || close {
-                if ga != gb {
+            let (ca, cb) = (comp[a], comp[b]);
+            let (ga, gb) = (group[ca], group[cb]);
+            let tree_edge = ga != gb;
+            let extra = d < 0.04 * MW as f32 && deg[ca] < 3 && deg[cb] < 3;
+            if tree_edge || extra {
+                if tree_edge {
                     for g in group.iter_mut() {
                         if *g == gb {
                             *g = ga;
                         }
                     }
                 }
+                deg[ca] += 1;
+                deg[cb] += 1;
+                provs[a].sea_adj.push(b);
+                provs[b].sea_adj.push(a);
+            }
+        }
+        // famous crossings between provinces that are on the same landmass
+        for &((lo1, la1), (lo2, la2)) in FERRIES {
+            let a = nearest_land(&provs, proj(lo1, la1), &[]);
+            let b = nearest_land(&provs, proj(lo2, la2), &[]);
+            if a != usize::MAX && b != usize::MAX && !provs[a].sea_adj.contains(&b) {
                 provs[a].sea_adj.push(b);
                 provs[b].sea_adj.push(a);
             }
