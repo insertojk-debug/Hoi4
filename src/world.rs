@@ -64,3 +64,9 @@ pub fn inside(poly: &[Vec2], p: Vec2) -> bool {
     }
     c
 }
+
+
+// sea crossings between provinces that are cut apart on the map (lon,lat) <-> (lon,lat)
+pub const FERRIES: &[((f32, f32), (f32, f32))] = &[
+    ((-4.5, 37.3), (-5.3, 34.3)), // Gibraltar
+];
