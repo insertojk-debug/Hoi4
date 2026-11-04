@@ -57,7 +57,8 @@ impl Game {
     fn paint_prov(&mut self, p: usize) {
         let (x0, y0, x1, y1) = self.provs[p].bb;
         let sea = self.provs[p].sea;
-        let base = if sea { Color::new(0.08, 0.14, 0.28, 1.0) } else { country_color(self.provs[p].owner) };
+        let sea_col = Color::new(0.08, 0.14, 0.28, 1.0);
+        let base = if sea { sea_col } else { country_color(self.provs[p].owner) };
         let dark = Color::new(base.r * 0.5, base.g * 0.5, base.b * 0.5, 1.0);
         for y in y0..=y1 {
             for x in x0..=x1 {
@@ -66,10 +67,12 @@ impl Game {
                 }
                 let mut col = base;
                 if !sea {
-                    let r = x + 1 < MW && self.tile[y * MW + x + 1] as usize != p;
-                    let d = y + 1 < MH && self.tile[(y + 1) * MW + x] as usize != p;
-                    if r || d {
-                        col = dark;
+                    let rq = if x + 1 < MW { self.tile[y * MW + x + 1] as usize } else { p };
+                    let dq = if y + 1 < MH { self.tile[(y + 1) * MW + x] as usize } else { p };
+                    if rq != p || dq != p {
+                        // a border; where two land provinces are not linked (a strait) show water instead
+                        let strait = |q: usize| q != p && !self.provs[q].sea && !self.provs[p].adj.contains(&q);
+                        col = if strait(rq) || strait(dq) { sea_col } else { dark };
                     }
                 }
                 self.img.set_pixel(x as u32, y as u32, col);
