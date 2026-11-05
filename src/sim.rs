@@ -22,7 +22,15 @@ impl Game {
             }
             for c in 1..NC {
                 for _ in 0..2 {
-                    if self.cs[c].ic < 10.0 || self.cs[c].mp < 20.0 || count[c] >= 4 + land[c] / 6 {
+                    if count[c] >= 4 + land[c] / 6 {
+                        break;
+                    }
+                    let roll = rand::gen_range(0, 100);
+                    let mut kind = if roll < 60 { 0 } else if roll < 82 { 1 } else { 2 };
+                    if !self.can_afford(c, kind) {
+                        kind = 0;
+                    }
+                    if !self.can_afford(c, kind) {
                         break;
                     }
                     let owned: Vec<usize> = (0..self.provs.len())
@@ -30,7 +38,7 @@ impl Game {
                         .collect();
                     if !owned.is_empty() {
                         let p = owned[rand::gen_range(0, owned.len())];
-                        self.recruit(c, p);
+                        self.recruit(c, p, kind);
                         count[c] += 1;
                     }
                 }
@@ -62,7 +70,8 @@ impl Game {
             if engaged {
                 continue;
             }
-            let rate = if self.provs[pv].sea_adj.contains(&nx) { 0.12 } else { 0.34 };
+            let base = if self.provs[pv].sea_adj.contains(&nx) { 0.12 } else { 0.34 };
+            let rate = base * SPD[self.armies[i].kind];
             self.armies[i].prog += rate;
             if self.armies[i].prog >= 0.999 {
                 self.armies[i].prog = 0.0;
@@ -80,7 +89,8 @@ impl Game {
             for &i in v {
                 for &j in v {
                     if i != j && at_war(self.armies[i].owner, self.armies[j].owner) {
-                        let mut d = self.armies[i].size * 0.12 * rand::gen_range(0.7f32, 1.3f32);
+                        let mut d = self.armies[i].size * 0.12 * ATK[self.armies[i].kind] * rand::gen_range(0.7f32, 1.3f32);
+                        d /= DEF[self.armies[j].kind];
                         if self.armies[j].owner == self.provs[self.armies[j].prov].owner {
                             d *= 0.75; // defender bonus
                         }
@@ -126,7 +136,9 @@ impl Game {
                 }
                 for y in (x + 1)..v.len() {
                     let j = v[y];
-                    if remove[j] || !self.armies[j].path.is_empty() || self.armies[i].owner != self.armies[j].owner {
+                    if remove[j] || !self.armies[j].path.is_empty() || self.armies[i].owner != self.armies[j].owner
+                        || self.armies[i].kind != self.armies[j].kind
+                    {
                         continue;
                     }
                     let s = self.armies[j].size;

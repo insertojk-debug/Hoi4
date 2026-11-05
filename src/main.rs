@@ -39,8 +39,29 @@ fn date(day: u32) -> String {
     format!("{}-{:02}-{:02}", 1936 + day / 360, (day % 360) / 30 + 1, day % 30 + 1)
 }
 
-// bottom bar buttons: PLAY, SPEED, RECRUIT, ZOOM+, ZOOM-
-const BW: [f32; 5] = [1.2, 1.2, 2.2, 0.6, 0.6];
+// bottom bar buttons: PLAY, SPEED, ZOOM+, ZOOM-
+const BW: [f32; 4] = [1.4, 1.4, 0.8, 0.8];
+
+// the train menu: panel and three unit buttons around a province on screen
+fn menu_layout(l: &Lay, sw: f32, sh: f32, anchor: Vec2) -> [Rect; 3] {
+    let bw = (l.fs * 5.2).min((sw - 40.0) / 3.2);
+    let bh = l.fs * 3.3;
+    let gap = l.fs * 0.35;
+    let total = bw * 3.0 + gap * 2.0;
+    let x0 = (anchor.x - total / 2.0).clamp(gap + 4.0, (sw - total - gap - 4.0).max(gap + 4.0));
+    let mut y0 = anchor.y - bh - l.fs * 1.6;
+    if y0 < l.top + gap + 4.0 {
+        y0 = anchor.y + l.fs * 1.6;
+    }
+    y0 = y0.clamp(l.top + gap + 4.0, sh - l.bar - bh - gap - 4.0);
+    [0, 1, 2].map(|k| Rect::new(x0 + k as f32 * (bw + gap), y0, bw, bh))
+}
+
+fn in_menu(r: &[Rect; 3], gap: f32, m: Vec2) -> bool {
+    let (x0, y0) = (r[0].x - gap, r[0].y - gap);
+    let (x1, y1) = (r[2].x + r[2].w + gap, r[0].y + r[0].h + gap);
+    m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1
+}
 
 fn button_x(sw: f32, i: usize) -> (f32, f32) {
     let total: f32 = BW.iter().sum();
@@ -95,9 +116,31 @@ async fn main() {
                     g = Game::new();
                     cam = g.provs[g.armies[0].prov].pos;
                     zoom = 12.0;
+                } else if g.menu.is_some() && {
+                    let p = g.menu.unwrap();
+                    let sc = l.base * zoom;
+                    let anchor = vec2(sw / 2.0 + (g.provs[p].pos.x - cam.x) * sc, mid_y + (g.provs[p].pos.y - cam.y) * sc);
+                    let rects = menu_layout(&l, sw, sh, anchor);
+                    in_menu(&rects, l.fs * 0.35, vec2(mx, my))
+                } {
+                    // tap inside the train menu
+                    let p = g.menu.unwrap();
+                    let sc = l.base * zoom;
+                    let anchor = vec2(sw / 2.0 + (g.provs[p].pos.x - cam.x) * sc, mid_y + (g.provs[p].pos.y - cam.y) * sc);
+                    let rects = menu_layout(&l, sw, sh, anchor);
+                    for k in 0..3 {
+                        if rects[k].contains(vec2(mx, my)) {
+                            if g.recruit(0, p, k) {
+                                g.say(&format!("{} trained", KIND_NAMES[k]));
+                                g.menu = None;
+                            } else {
+                                g.say("Not enough industry or manpower");
+                            }
+                        }
+                    }
                 } else if my > sh - l.bar {
                     let mut bi = 0;
-                    for i in 0..5 {
+                    for i in 0..4 {
                         let (x, w) = button_x(sw, i);
                         if mx >= x && mx < x + w {
                             bi = i;
@@ -106,18 +149,7 @@ async fn main() {
                     match bi {
                         0 => g.paused = !g.paused,
                         1 => g.speed_i = (g.speed_i + 1) % SPEEDS.len(),
-                        2 => {
-                            let ok = g.sel_prov.filter(|&p| !g.provs[p].sea && g.provs[p].owner == 0);
-                            match ok {
-                                Some(p) => {
-                                    if !g.recruit(0, p) {
-                                        g.say("Need 10 IC + 20 manpower");
-                                    }
-                                }
-                                None => g.say("Select one of your provinces"),
-                            }
-                        }
-                        3 => zoom = (zoom * 1.4).clamp(1.0, 24.0),
+                        2 => zoom = (zoom * 1.4).clamp(1.0, 24.0),
                         _ => zoom = (zoom / 1.4).clamp(1.0, 24.0),
                     }
                 } else if my > l.top {
@@ -241,7 +273,30 @@ async fn main() {
                 if selected { 5.0 } else { 2.0 },
                 if selected { YELLOW } else { WHITE },
             );
-            ctext(&format!("{}", a.size as i32), x + bw / 2.0, y + bh / 2.0, bh * 0.8, WHITE);
+            ctext(&format!("{}{}", KIND_LETTER[a.kind], a.size as i32), x + bw / 2.0, y + bh / 2.0, bh * 0.8, WHITE);
+        }
+
+        // train menu (like Polytopia): three unit choices next to the province
+        if let Some(p) = g.menu {
+            let anchor = to_screen(g.provs[p].pos);
+            let rects = menu_layout(&l, sw, sh, anchor);
+            let gap = l.fs * 0.35;
+            let (px, py) = (rects[0].x - gap, rects[0].y - gap);
+            let (pw, ph) = (rects[2].x + rects[2].w + gap - px, rects[0].h + gap * 2.0);
+            draw_rectangle(px, py, pw, ph, Color::new(0.05, 0.06, 0.1, 0.92));
+            draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(0.6, 0.65, 0.8, 1.0));
+            for k in 0..3 {
+                let r = rects[k];
+                let ok = g.can_afford(0, k);
+                let bg = if ok { Color::new(0.22, 0.30, 0.45, 1.0) } else { Color::new(0.20, 0.20, 0.22, 1.0) };
+                let fg = if ok { WHITE } else { Color::new(0.55, 0.55, 0.58, 1.0) };
+                draw_rectangle(r.x, r.y, r.w, r.h, bg);
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(0.75, 0.8, 0.95, 0.8));
+                ctext(KIND_NAMES[k], r.x + r.w / 2.0, r.y + r.h * 0.3, l.fs * 0.95, fg);
+                ctext(&format!("{} IC  {} MP", COST[k].0 as i32, COST[k].1 as i32), r.x + r.w / 2.0, r.y + r.h * 0.62, l.fs * 0.7, fg);
+                let note = ["balanced", "strong attack", "fast + tough"][k];
+                ctext(note, r.x + r.w / 2.0, r.y + r.h * 0.84, l.fs * 0.6, Color::new(0.8, 0.85, 0.6, if ok { 1.0 } else { 0.5 }));
+            }
         }
 
         // top HUD
@@ -264,7 +319,6 @@ async fn main() {
         let labels = [
             if g.paused { "> PLAY".to_string() } else { "|| PAUSE".to_string() },
             format!("SPEED x{}", SPEEDS[g.speed_i] as i32),
-            "RECRUIT 10IC 20MP".to_string(),
             "+".to_string(),
             "-".to_string(),
         ];

@@ -75,3 +75,11 @@ pub fn inside(poly: &[Vec2], p: Vec2) -> bool {
 pub const FERRIES: &[((f32, f32), (f32, f32))] = &[
     ((-4.5, 37.3), (-5.3, 34.3)), // Gibraltar
 ];
+
+// unit types: 0 = Infantry, 1 = Artillery, 2 = Tank
+pub const KIND_NAMES: [&str; 3] = ["Infantry", "Artillery", "Tank"];
+pub const KIND_LETTER: [&str; 3] = ["I", "A", "T"];
+pub const COST: [(f32, f32); 3] = [(10.0, 20.0), (18.0, 15.0), (30.0, 25.0)]; // (industry, manpower)
+pub const ATK: [f32; 3] = [1.0, 1.6, 1.4];
+pub const DEF: [f32; 3] = [1.0, 0.6, 1.3];
+pub const SPD: [f32; 3] = [1.0, 0.8, 1.6];

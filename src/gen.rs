@@ -288,6 +288,7 @@ impl Game {
             speed_i: 0,
             sel_army: None,
             sel_prov: None,
+            menu: None,
             img,
             tex,
             dirty: true,
@@ -297,10 +298,12 @@ impl Game {
         };
         for c in 0..NC {
             let owned: Vec<usize> = (0..g.provs.len()).filter(|&i| !g.provs[i].sea && g.provs[i].owner == c).collect();
-            g.spawn(c, caps[c], 15.0);
+            g.spawn(c, caps[c], 15.0, 0);
             for _ in 0..(owned.len() / 8).max(1) {
                 let p = owned[rand::gen_range(0, owned.len())];
-                g.spawn(c, p, 10.0);
+                let roll = rand::gen_range(0, 100);
+                let kind = if roll < 65 { 0 } else if roll < 85 { 1 } else { 2 };
+                g.spawn(c, p, 10.0, kind);
             }
         }
         g.recolor_all();
