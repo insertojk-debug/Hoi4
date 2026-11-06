@@ -14,66 +14,49 @@ pub struct Prov {
     pub sea_adj: Vec<usize>,              // sea lanes to other continents (slow)
 }
 
+// your soldiers (bots expand with plain troop numbers instead)
 pub struct Army {
     pub id: u32,
     pub kind: usize,
-    pub owner: usize,
     pub size: f32,
     pub prov: usize,
     pub path: VecDeque<usize>,
     pub prog: f32,
 }
 
-pub struct Country {
-    pub mp: f32,
-    pub ic: f32,
-}
-
 pub struct Game {
     pub provs: Vec<Prov>,
     pub tile: Vec<u16>,
     pub changed: Vec<usize>,
-    pub cs: Vec<Country>,
     pub armies: Vec<Army>,
     pub next_id: u32,
-    pub day: u32,
-    pub acc: f32,
-    pub paused: bool,
-    pub speed_i: usize,
     pub sel_army: Option<u32>,
-    pub sel_prov: Option<usize>,
     pub menu: Option<usize>, // province whose train menu is open
+    pub garrison: HashMap<usize, f32>, // defensive strength of your soldiers per province
     pub img: Image,
     pub tex: Texture2D,
     pub dirty: bool,
-    pub result: Option<bool>,
+    pub paused: bool,
+    pub speed_i: usize,
+    pub acc: f32,
     pub toast: String,
     pub toast_t: f32,
-    pub mode: u8, // 0 = World War, 1 = Territory Royale
     pub roy: Royale,
     pub flush_t: f32,
-    pub fresh: bool, // map still in its starting state
-    pub cols: usize, // province grid this map was built with
 }
 
 impl Game {
-    pub fn spawn(&mut self, owner: usize, prov: usize, size: f32, kind: usize) {
+    pub fn spawn(&mut self, prov: usize, size: f32, kind: usize) {
         let id = self.next_id;
         self.next_id += 1;
-        self.armies.push(Army { id, kind, owner, size, prov, path: VecDeque::new(), prog: 0.0 });
+        self.armies.push(Army { id, kind, size, prov, path: VecDeque::new(), prog: 0.0 });
     }
 
     fn paint_prov(&mut self, p: usize) {
         let (x0, y0, x1, y1) = self.provs[p].bb;
         let sea = self.provs[p].sea;
         let sea_col = Color::new(0.08, 0.14, 0.28, 1.0);
-        let base = if sea {
-            sea_col
-        } else if self.mode == 1 {
-            crate::royale::owner_color(self, self.provs[p].owner)
-        } else {
-            country_color(self.provs[p].owner)
-        };
+        let base = if sea { sea_col } else { crate::royale::owner_color(self, self.provs[p].owner) };
         let dark = Color::new(base.r * 0.5, base.g * 0.5, base.b * 0.5, 1.0);
         for y in y0..=y1 {
             for x in x0..=x1 {
@@ -156,20 +139,20 @@ impl Game {
         None
     }
 
-    pub fn can_afford(&self, c: usize, kind: usize) -> bool {
-        self.cs[c].ic >= COST[kind].0 && self.cs[c].mp >= COST[kind].1
+    pub fn can_afford(&self, kind: usize) -> bool {
+        self.roy.players[0].troops >= TCOST[kind]
     }
 
-    pub fn recruit(&mut self, c: usize, p: usize, kind: usize) -> bool {
-        if !self.can_afford(c, kind) {
+    // train a soldier in one of your provinces; it costs troops
+    pub fn recruit(&mut self, p: usize, kind: usize) -> bool {
+        if !self.can_afford(kind) {
             return false;
         }
-        self.cs[c].ic -= COST[kind].0;
-        self.cs[c].mp -= COST[kind].1;
-        if let Some(a) = self.armies.iter_mut().find(|a| a.owner == c && a.prov == p && a.kind == kind && a.path.is_empty()) {
+        self.roy.players[0].troops -= TCOST[kind];
+        if let Some(a) = self.armies.iter_mut().find(|a| a.prov == p && a.kind == kind && a.path.is_empty()) {
             a.size += 10.0;
         } else {
-            self.spawn(c, p, 10.0, kind);
+            self.spawn(p, 10.0, kind);
         }
         true
     }
@@ -179,20 +162,20 @@ impl Game {
         self.toast_t = 2.0;
     }
 
-    pub fn tap_map(&mut self, p: usize) {
+    // returns false when the tap was not about your soldiers or your own land
+    pub fn tap_map(&mut self, p: usize) -> bool {
         self.menu = None;
-        // a soldier of yours here: just select it (no menu)
-        let own_here = self.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
+        // one of your soldiers here: select it (tap again to deselect)
+        let own_here = self.armies.iter().find(|a| a.prov == p).map(|a| a.id);
         if let Some(id) = own_here {
             self.sel_army = if self.sel_army == Some(id) { None } else { Some(id) };
-            self.sel_prov = Some(p);
-            return;
+            return true;
         }
-        // a soldier is selected: send it there
+        // a soldier is selected: send it there, then let go of it so you can pick the next one right away
         if let Some(id) = self.sel_army {
             if self.provs[p].sea {
                 self.say("Can't move to sea");
-                return;
+                return true;
             }
             let from = self.armies.iter().find(|a| a.id == id).map(|a| a.prov);
             if let Some(f) = from {
@@ -202,24 +185,20 @@ impl Game {
                             a.path = path;
                             a.prog = 0.0;
                         }
+                        self.sel_army = None;
                     }
                     None => self.say("Unreachable"),
                 }
+            } else {
+                self.sel_army = None;
             }
-            return;
+            return true;
         }
-        // nothing selected: one of your empty provinces opens the train menu
-        self.sel_prov = Some(p);
+        // one of your own empty provinces: open the train menu
         if !self.provs[p].sea && self.provs[p].owner == 0 {
             self.menu = Some(p);
+            return true;
         }
-    }
-
-    pub fn occupancy(&self) -> HashMap<usize, Vec<usize>> {
-        let mut m: HashMap<usize, Vec<usize>> = HashMap::new();
-        for (i, a) in self.armies.iter().enumerate() {
-            m.entry(a.prov).or_default().push(i);
-        }
-        m
+        false
     }
 }

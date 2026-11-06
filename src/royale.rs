@@ -6,8 +6,6 @@ use crate::world::*;
 pub const PLAYERS: usize = 501; // you + 500 bots
 const PEACE: u32 = 150; // ticks of peace at the start
 const EXPAND_P: i32 = 12; // % chance per action that free land is claimed (slows the land grab)
-pub const ROY_COLS: usize = 280; // royale uses a finer province grid so 500 players have room
-pub const ROY_ROWS: usize = 140;
 
 pub struct Player {
     pub troops: f32,
@@ -76,7 +74,7 @@ pub fn owner_color(g: &Game, owner: usize) -> Color {
     }
 }
 
-fn claim(g: &mut Game, p: usize, i: usize) {
+pub fn claim(g: &mut Game, p: usize, i: usize) {
     g.provs[p].owner = i;
     g.roy.slot[p] = g.roy.owned[i].len() as u32;
     g.roy.owned[i].push(p as u32);
@@ -85,7 +83,7 @@ fn claim(g: &mut Game, p: usize, i: usize) {
     g.dirty = true;
 }
 
-fn release(g: &mut Game, p: usize, d: usize) {
+pub fn release(g: &mut Game, p: usize, d: usize) {
     let s = g.roy.slot[p] as usize;
     g.roy.owned[d].swap_remove(s);
     if s < g.roy.owned[d].len() {
@@ -97,13 +95,10 @@ fn release(g: &mut Game, p: usize, d: usize) {
 
 // start a fresh Territory Royale on the existing world map: all land is free, 500 bots pick spawn points
 pub fn init(g: &mut Game) {
-    g.mode = 1;
-    g.fresh = false;
     g.armies.clear();
+    g.garrison.clear();
     g.sel_army = None;
-    g.sel_prov = None;
     g.menu = None;
-    g.result = None;
     g.paused = false;
     g.speed_i = 0;
     g.acc = 0.0;
@@ -153,7 +148,7 @@ fn stats(g: &mut Game) {
     g.roy.top = v;
 }
 
-// tapping: first tap chooses your spawn, later taps steer where you expand
+// tapping: the first tap chooses your spawn; later taps pick soldiers, train them, or steer your expansion
 pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
     if g.roy.over.is_some() {
         return None;
@@ -165,18 +160,21 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
         }
         claim(g, p, 0);
         g.roy.players[0].alive = true;
-        g.roy.players[0].troops = 40.0;
+        g.roy.players[0].troops = 60.0;
         g.roy.alive += 1;
         g.roy.started = true;
         stats(g);
         g.flush();
         return Some(p);
     }
-    g.roy.focus = if g.roy.focus == Some(p) { None } else { Some(p) };
+    if !g.tap_map(p) {
+        // not a soldier and not your own land: steer where your territory grows
+        g.roy.focus = if g.roy.focus == Some(p) { None } else { Some(p) };
+    }
     None
 }
 
-fn eliminate(g: &mut Game, d: usize) {
+pub fn eliminate(g: &mut Game, d: usize) {
     g.roy.players[d].alive = false;
     g.roy.players[d].troops = 0.0;
     g.roy.alive -= 1;
@@ -248,7 +246,8 @@ fn act(g: &mut Game, i: usize) {
         if i != 0 && rand::gen_range(0, 100) >= 5 {
             return;
         }
-        let cost = (dens * 2.0 + 3.0) * mult;
+        let guard = g.garrison.get(&q).copied().unwrap_or(0.0);
+        let cost = (dens * 2.0 + 3.0 + guard * 3.0) * mult;
         let (share, strong) = if i == 0 {
             (ATTACK[g.roy.attack], true)
         } else {
@@ -260,6 +259,9 @@ fn act(g: &mut Game, i: usize) {
             g.roy.players[d].troops = (g.roy.players[d].troops - dens).max(0.0);
             release(g, q, d);
             claim(g, q, i);
+            if d == 0 {
+                g.armies.retain(|a| a.prov != q); // your soldiers there are lost
+            }
             if g.roy.players[d].land == 0 {
                 eliminate(g, d);
             }
@@ -289,6 +291,7 @@ pub fn step(g: &mut Game) {
             act(g, i);
         }
     }
+    crate::units::step(g);
     if g.roy.tick % 5 == 0 {
         stats(g);
     }
@@ -305,12 +308,13 @@ pub fn draw(g: &Game, fs: f32, top: f32, sw: f32, sh: f32) {
     } else {
         let me = &r.players[0];
         format!(
-            "Alive {}/{}   Land {} ({:.1}%)   Troops {:.0}   Rank {}",
+            "Alive {}/{}   Land {} ({:.1}%)   Troops {:.0}   Units {}   Rank {}",
             r.alive,
             PLAYERS,
             me.land,
             me.land as f32 / r.total_land as f32 * 100.0,
             me.troops,
+            g.armies.len(),
             r.rank
         )
     };

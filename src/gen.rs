@@ -101,11 +101,7 @@ fn nearest_land(provs: &[Prov], t: Vec2, skip: &[usize]) -> usize {
 
 impl Game {
     pub fn new() -> Game {
-        Game::new_grid(COLS, ROWS)
-    }
-
-    // build the world with a grid of cols x rows province seeds (finer grid = more, smaller provinces)
-    pub fn new_grid(cols: usize, rows: usize) -> Game {
+        let (cols, rows) = (COLS, ROWS);
         rand::srand(11);
         let mut provs: Vec<Prov> = Vec::new();
         let cw = MW as f32 / cols as f32;
@@ -114,7 +110,7 @@ impl Game {
             for c in 0..cols {
                 let x = (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * cw;
                 let y = (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * ch;
-                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
+                provs.push(Prov { pos: vec2(x, y), owner: NEUTRAL, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
             }
         }
         // land = province whose centre (and mostly its surroundings) lies inside a continent outline
@@ -267,77 +263,28 @@ impl Game {
             }
         }
 
-        // capitals, then ownership: nearest seed (capital or claim point) on the same continent
-        let mut caps: Vec<usize> = vec![];
-        for (lon, lat) in ANCHORS {
-            let c = nearest_land(&provs, proj(lon, lat), &caps);
-            caps.push(c);
-        }
-        let mut seeds: Vec<(usize, usize)> = (0..NC).map(|k| (k, caps[k])).collect();
-        for (k, lon, lat) in EXTRAS {
-            seeds.push((k, nearest_land(&provs, proj(lon, lat), &[])));
-        }
-        for i in 0..provs.len() {
-            if provs[i].sea {
-                continue;
-            }
-            // seeds on the same outline (so Spain can't claim Morocco), else on the same landmass, else any
-            let same: Vec<&(usize, usize)> = seeds.iter().filter(|sd| region[sd.1] == region[i]).collect();
-            let same = if same.is_empty() { seeds.iter().filter(|sd| comp[sd.1] == comp[i]).collect() } else { same };
-            let cand: Vec<&(usize, usize)> = if same.is_empty() { seeds.iter().collect() } else { same };
-            let mut best = cand[0].0;
-            let mut bd = f32::MAX;
-            for sd in cand {
-                let d = provs[i].pos.distance(provs[sd.1].pos) / W[sd.0];
-                if d < bd {
-                    bd = d;
-                    best = sd.0;
-                }
-            }
-            provs[i].owner = best;
-        }
-
-        let cs = (0..NC).map(|_| Country { mp: 100.0, ic: 60.0 }).collect();
         let img = Image::gen_image_color(MW as u16, MH as u16, BLACK);
         let tex = Texture2D::from_image(&img);
         tex.set_filter(FilterMode::Nearest);
-        let mut g = Game {
+        Game {
             provs,
             tile,
             changed: vec![],
-            cs,
             armies: vec![],
             next_id: 1,
-            day: 0,
-            acc: 0.0,
-            paused: true,
-            speed_i: 0,
             sel_army: None,
-            sel_prov: None,
             menu: None,
+            garrison: std::collections::HashMap::new(),
             img,
             tex,
-            dirty: true,
-            result: None,
+            dirty: false,
+            paused: false,
+            speed_i: 0,
+            acc: 0.0,
             toast: String::new(),
             toast_t: 0.0,
-            mode: 0,
             roy: crate::royale::Royale::new(),
             flush_t: 0.0,
-            fresh: true,
-            cols,
-        };
-        for c in 0..NC {
-            let owned: Vec<usize> = (0..g.provs.len()).filter(|&i| !g.provs[i].sea && g.provs[i].owner == c).collect();
-            g.spawn(c, caps[c], 15.0, 0);
-            for _ in 0..(owned.len() / 8).max(1) {
-                let p = owned[rand::gen_range(0, owned.len())];
-                let roll = rand::gen_range(0, 100);
-                let kind = if roll < 65 { 0 } else if roll < 85 { 1 } else { 2 };
-                g.spawn(c, p, 10.0, kind);
-            }
         }
-        g.recolor_all();
-        g
     }
 }
