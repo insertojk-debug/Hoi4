@@ -1,12 +1,14 @@
 use macroquad::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
+use crate::royale::Royale;
 use crate::world::*;
 
 pub struct Prov {
     pub pos: Vec2,
     pub owner: usize,
     pub sea: bool,
+    pub coast: bool,
     pub bb: (usize, usize, usize, usize), // bounding box in tiles
     pub adj: Vec<usize>,                  // land borders
     pub sea_adj: Vec<usize>,              // sea lanes to other continents (slow)
@@ -47,6 +49,11 @@ pub struct Game {
     pub result: Option<bool>,
     pub toast: String,
     pub toast_t: f32,
+    pub mode: u8, // 0 = World War, 1 = Territory Royale
+    pub roy: Royale,
+    pub flush_t: f32,
+    pub fresh: bool, // map still in its starting state
+    pub cols: usize, // province grid this map was built with
 }
 
 impl Game {
@@ -60,7 +67,13 @@ impl Game {
         let (x0, y0, x1, y1) = self.provs[p].bb;
         let sea = self.provs[p].sea;
         let sea_col = Color::new(0.08, 0.14, 0.28, 1.0);
-        let base = if sea { sea_col } else { country_color(self.provs[p].owner) };
+        let base = if sea {
+            sea_col
+        } else if self.mode == 1 {
+            crate::royale::owner_color(self, self.provs[p].owner)
+        } else {
+            country_color(self.provs[p].owner)
+        };
         let dark = Color::new(base.r * 0.5, base.g * 0.5, base.b * 0.5, 1.0);
         for y in y0..=y1 {
             for x in x0..=x1 {

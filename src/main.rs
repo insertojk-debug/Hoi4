@@ -3,6 +3,7 @@ use macroquad::prelude::*;
 mod coast;
 mod game;
 mod gen;
+mod royale;
 mod sim;
 mod world;
 
@@ -39,8 +40,9 @@ fn date(day: u32) -> String {
     format!("{}-{:02}-{:02}", 1936 + day / 360, (day % 360) / 30 + 1, day % 30 + 1)
 }
 
-// bottom bar buttons: PLAY, SPEED, ZOOM+, ZOOM-
+// bottom bar buttons. World War: PLAY, SPEED, ZOOM+, ZOOM-.  Royale: PLAY, SPEED, ATTACK, ZOOM+, ZOOM-
 const BW: [f32; 4] = [1.4, 1.4, 0.8, 0.8];
+const BWR: [f32; 5] = [1.2, 1.2, 1.9, 0.7, 0.7];
 
 // the train menu: panel and three unit buttons around a province on screen
 fn menu_layout(l: &Lay, sw: f32, sh: f32, anchor: Vec2) -> [Rect; 3] {
@@ -63,10 +65,11 @@ fn in_menu(r: &[Rect; 3], gap: f32, m: Vec2) -> bool {
     m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1
 }
 
-fn button_x(sw: f32, i: usize) -> (f32, f32) {
-    let total: f32 = BW.iter().sum();
-    let x: f32 = BW[..i].iter().sum::<f32>() / total * sw;
-    (x, BW[i] / total * sw)
+fn button_x(sw: f32, i: usize, mode: u8) -> (f32, f32) {
+    let bw: &[f32] = if mode == 1 { &BWR } else { &BW };
+    let total: f32 = bw.iter().sum();
+    let x: f32 = bw[..i].iter().sum::<f32>() / total * sw;
+    (x, bw[i] / total * sw)
 }
 
 fn conf() -> Conf {
@@ -81,8 +84,10 @@ fn conf() -> Conf {
 #[macroquad::main(conf)]
 async fn main() {
     let mut g = Game::new();
-    let mut cam = g.provs[g.armies[0].prov].pos;
-    let mut zoom = 12.0f32;
+    let mut screen = 0u8; // 0 = title, 1 = playing, 2 = loading
+    let mut start_mode = 0u8;
+    let mut cam = vec2(MW as f32 / 2.0, MH as f32 / 2.0);
+    let mut zoom = 1.0f32;
     let mut press: Option<(Vec2, Vec2)> = None;
     let mut moved = false;
     let mut pinch_prev: Option<f32> = None;
@@ -93,6 +98,61 @@ async fn main() {
         let dt = get_frame_time();
         let mid_y = l.top + l.avail_h / 2.0;
         let (mx, my) = mouse_position();
+
+        // ---- title and loading screens ----
+        if screen != 1 {
+            clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
+            let sc = (sw / MW as f32).min(sh / MH as f32);
+            draw_texture_ex(
+                &g.tex,
+                sw / 2.0 - MW as f32 * sc / 2.0,
+                sh / 2.0 - MH as f32 * sc / 2.0,
+                Color::new(0.35, 0.35, 0.4, 1.0),
+                DrawTextureParams { dest_size: Some(vec2(MW as f32 * sc, MH as f32 * sc)), ..Default::default() },
+            );
+            if screen == 2 {
+                ctext("Loading...", sw / 2.0, sh / 2.0, l.fs * 1.6, WHITE);
+                next_frame().await;
+                if start_mode == 1 {
+                    if g.cols != royale::ROY_COLS {
+                        g = Game::new_grid(royale::ROY_COLS, royale::ROY_ROWS);
+                    }
+                    royale::init(&mut g);
+                    cam = vec2(MW as f32 / 2.0, MH as f32 / 2.0);
+                    zoom = 1.0;
+                } else {
+                    if !g.fresh || g.cols != COLS {
+                        g = Game::new();
+                    }
+                    g.fresh = false;
+                    g.mode = 0;
+                    cam = g.provs[g.armies[0].prov].pos;
+                    zoom = 12.0;
+                }
+                screen = 1;
+                continue;
+            }
+            ctext("WORLD CONQUEST", sw / 2.0, sh * 0.18, l.fs * 2.6, WHITE);
+            ctext("Choose a game mode", sw / 2.0, sh * 0.29, l.fs, GRAY);
+            let (bw, bh) = ((sw * 0.8).min(l.fs * 24.0), l.fs * 4.2);
+            let titles = [
+                ("TERRITORY ROYALE", "Spawn, expand and outlast 500 bots"),
+                ("WORLD WAR", "Command Infantry, Artillery and Tanks"),
+            ];
+            for (k, (name, sub)) in titles.iter().enumerate() {
+                let (x, y) = (sw / 2.0 - bw / 2.0, sh * (0.42 + 0.22 * k as f32));
+                draw_rectangle(x, y, bw, bh, Color::new(0.2, 0.28, 0.45, 0.95));
+                draw_rectangle_lines(x, y, bw, bh, 3.0, Color::new(0.75, 0.8, 0.95, 1.0));
+                ctext(name, sw / 2.0, y + bh * 0.36, l.fs * 1.5, WHITE);
+                ctext(sub, sw / 2.0, y + bh * 0.72, l.fs * 0.8, Color::new(0.8, 0.85, 0.6, 1.0));
+                if is_mouse_button_pressed(MouseButton::Left) && mx >= x && mx <= x + bw && my >= y && my <= y + bh {
+                    start_mode = if k == 0 { 1 } else { 0 };
+                    screen = 2;
+                }
+            }
+            next_frame().await;
+            continue;
+        }
 
         // ---- input ----
         let (_, wy) = mouse_wheel();
@@ -112,10 +172,8 @@ async fn main() {
         } else {
             pinch_prev = None;
             if is_mouse_button_pressed(MouseButton::Left) {
-                if g.result.is_some() {
-                    g = Game::new();
-                    cam = g.provs[g.armies[0].prov].pos;
-                    zoom = 12.0;
+                if g.result.is_some() || (g.mode == 1 && g.roy.over.is_some()) {
+                    screen = 0;
                 } else if g.menu.is_some() && {
                     let p = g.menu.unwrap();
                     let sc = l.base * zoom;
@@ -140,16 +198,17 @@ async fn main() {
                     }
                 } else if my > sh - l.bar {
                     let mut bi = 0;
-                    for i in 0..4 {
-                        let (x, w) = button_x(sw, i);
+                    for i in 0..(if g.mode == 1 { 5 } else { 4 }) {
+                        let (x, w) = button_x(sw, i, g.mode);
                         if mx >= x && mx < x + w {
                             bi = i;
                         }
                     }
-                    match bi {
-                        0 => g.paused = !g.paused,
-                        1 => g.speed_i = (g.speed_i + 1) % SPEEDS.len(),
-                        2 => zoom = (zoom * 1.4).clamp(1.0, 24.0),
+                    match (g.mode, bi) {
+                        (_, 0) => g.paused = !g.paused,
+                        (_, 1) => g.speed_i = (g.speed_i + 1) % SPEEDS.len(),
+                        (1, 2) => g.roy.attack = (g.roy.attack + 1) % ATTACK.len(),
+                        (1, 3) | (0, 2) => zoom = (zoom * 1.4).clamp(1.0, 24.0),
                         _ => zoom = (zoom / 1.4).clamp(1.0, 24.0),
                     }
                 } else if my > l.top {
@@ -174,7 +233,14 @@ async fn main() {
                         let ty = ((my - mid_y) / scale + cam.y).floor();
                         if tx >= 0.0 && ty >= 0.0 && (tx as usize) < MW && (ty as usize) < MH {
                             let p = g.tile[ty as usize * MW + tx as usize] as usize;
-                            g.tap_map(p);
+                            if g.mode == 1 {
+                                if let Some(sp) = royale::tap(&mut g, p) {
+                                    cam = g.provs[sp].pos;
+                                    zoom = 6.0;
+                                }
+                            } else {
+                                g.tap_map(p);
+                            }
                         }
                     }
                     press = None;
@@ -189,15 +255,36 @@ async fn main() {
         cam.y = if hh >= MH as f32 / 2.0 { MH as f32 / 2.0 } else { cam.y.clamp(hh, MH as f32 - hh) };
 
         // ---- simulation ----
-        if !g.paused && g.result.is_none() {
-            g.acc += dt * SPEEDS[g.speed_i];
-            while g.acc >= 0.5 {
-                g.acc -= 0.5;
-                g.step_day();
+        if g.mode == 1 {
+            if g.roy.started && g.roy.over.is_none() && !g.paused {
+                g.acc += dt * SPEEDS[g.speed_i];
+                let mut n = 0;
+                while g.acc >= 0.2 && n < 20 {
+                    g.acc -= 0.2;
+                    royale::step(&mut g);
+                    n += 1;
+                }
+                if n == 20 {
+                    g.acc = 0.0;
+                }
             }
-        }
-        if g.dirty {
-            g.flush();
+            // redraw the map a few times a second (many provinces change hands every tick)
+            g.flush_t += dt;
+            if g.dirty && g.flush_t > 0.1 {
+                g.flush();
+                g.flush_t = 0.0;
+            }
+        } else {
+            if !g.paused && g.result.is_none() {
+                g.acc += dt * SPEEDS[g.speed_i];
+                while g.acc >= 0.5 {
+                    g.acc -= 0.5;
+                    g.step_day();
+                }
+            }
+            if g.dirty {
+                g.flush();
+            }
         }
         if g.toast_t > 0.0 {
             g.toast_t -= dt;
@@ -225,6 +312,13 @@ async fn main() {
                     let e = to_screen(g.provs[b].pos);
                     draw_line(s.x, s.y, e.x, e.y, 2.0, Color::new(0.5, 0.8, 1.0, 0.55));
                 }
+            }
+        }
+        if g.mode == 1 {
+            if let Some(f) = g.roy.focus {
+                let c = to_screen(g.provs[f].pos);
+                draw_circle_lines(c.x, c.y, l.fs * 1.2, 3.0, YELLOW);
+                draw_circle(c.x, c.y, l.fs * 0.2, YELLOW);
             }
         }
         if let Some(p) = g.sel_prov {
@@ -300,36 +394,46 @@ async fn main() {
         }
 
         // top HUD
-        draw_rectangle(0.0, 0.0, sw, l.top, Color::new(0.1, 0.1, 0.14, 1.0));
-        let info = match g.sel_prov {
-            Some(p) if !g.provs[p].sea => format!("Province: {}", NAMES[g.provs[p].owner]),
-            Some(_) => "Province: Sea".to_string(),
-            None => "Tap a province".to_string(),
-        };
-        draw_text(
-            &format!("{}   MP {:.0}   IC {:.0}   |   {}", date(g.day), g.cs[0].mp, g.cs[0].ic, info),
-            l.fs * 0.6,
-            l.top * 0.68,
-            l.fs,
-            WHITE,
-        );
+        if g.mode == 0 {
+            draw_rectangle(0.0, 0.0, sw, l.top, Color::new(0.1, 0.1, 0.14, 1.0));
+            let info = match g.sel_prov {
+                Some(p) if !g.provs[p].sea => format!("Province: {}", NAMES[g.provs[p].owner]),
+                Some(_) => "Province: Sea".to_string(),
+                None => "Tap a province".to_string(),
+            };
+            draw_text(
+                &format!("{}   MP {:.0}   IC {:.0}   |   {}", date(g.day), g.cs[0].mp, g.cs[0].ic, info),
+                l.fs * 0.6,
+                l.top * 0.68,
+                l.fs,
+                WHITE,
+            );
+
+        }
 
         // bottom bar
         draw_rectangle(0.0, sh - l.bar, sw, l.bar, Color::new(0.1, 0.1, 0.14, 1.0));
-        let labels = [
+        let mut labels = vec![
             if g.paused { "> PLAY".to_string() } else { "|| PAUSE".to_string() },
             format!("SPEED x{}", SPEEDS[g.speed_i] as i32),
-            "+".to_string(),
-            "-".to_string(),
         ];
+        if g.mode == 1 {
+            let a = (ATTACK[g.roy.attack] * 100.0) as i32;
+            labels.push(if a == 0 { "ATTACK OFF".to_string() } else { format!("ATTACK {}%", a) });
+        }
+        labels.push("+".to_string());
+        labels.push("-".to_string());
         for (i, t) in labels.iter().enumerate() {
-            let (x, w) = button_x(sw, i);
+            let (x, w) = button_x(sw, i, g.mode);
             draw_rectangle(x + 3.0, sh - l.bar + 4.0, w - 6.0, l.bar - 8.0, Color::new(0.2, 0.22, 0.3, 1.0));
             ctext(t, x + w / 2.0, sh - l.bar / 2.0, l.fs * 0.85, WHITE);
         }
 
         if g.toast_t > 0.0 {
             ctext(&g.toast, sw / 2.0, sh - l.bar - l.fs * 1.2, l.fs * 1.1, YELLOW);
+        }
+        if g.mode == 1 {
+            royale::draw(&g, l.fs, l.top, sw, sh);
         }
         if let Some(win) = g.result {
             draw_rectangle(0.0, 0.0, sw, sh, Color::new(0.0, 0.0, 0.0, 0.7));

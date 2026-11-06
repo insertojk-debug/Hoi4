@@ -7,6 +7,7 @@ use crate::world::*;
 fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
     for p in provs.iter_mut() {
         p.adj.clear();
+        p.coast = false;
     }
     for y in 0..MH {
         for x in 0..MW {
@@ -17,6 +18,10 @@ fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
                     if a != b && !provs[a].sea && !provs[b].sea && !provs[a].adj.contains(&b) {
                         provs[a].adj.push(b);
                         provs[b].adj.push(a);
+                    }
+                    if a != b && provs[a].sea != provs[b].sea {
+                        provs[a].coast = true;
+                        provs[b].coast = true;
                     }
                 }
             }
@@ -96,32 +101,53 @@ fn nearest_land(provs: &[Prov], t: Vec2, skip: &[usize]) -> usize {
 
 impl Game {
     pub fn new() -> Game {
+        Game::new_grid(COLS, ROWS)
+    }
+
+    // build the world with a grid of cols x rows province seeds (finer grid = more, smaller provinces)
+    pub fn new_grid(cols: usize, rows: usize) -> Game {
         rand::srand(11);
         let mut provs: Vec<Prov> = Vec::new();
-        let cw = MW as f32 / COLS as f32;
-        let ch = MH as f32 / ROWS as f32;
-        for r in 0..ROWS {
-            for c in 0..COLS {
+        let cw = MW as f32 / cols as f32;
+        let ch = MH as f32 / rows as f32;
+        for r in 0..rows {
+            for c in 0..cols {
                 let x = (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * cw;
                 let y = (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * ch;
-                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: true, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
+                provs.push(Prov { pos: vec2(x, y), owner: NC, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
             }
         }
         // land = province whose centre (and mostly its surroundings) lies inside a continent outline
         let to_poly = |ps: &[(f32, f32)]| -> Vec<Vec2> { ps.iter().map(|&(a, b)| proj(a, b)).collect() };
         let land_polys: Vec<Vec<Vec2>> = LAND.iter().map(|p| to_poly(p)).collect();
         let sea_polys: Vec<Vec<Vec2>> = SEAS.iter().map(|p| to_poly(p)).collect();
-        let offs = [vec2(0.0, 0.0), vec2(-4.5, -4.5), vec2(4.5, -4.5), vec2(-4.5, 4.5), vec2(4.5, 4.5)];
+        let o = cw * 0.3;
+        let offs = [vec2(0.0, 0.0), vec2(-o, -o), vec2(o, -o), vec2(-o, o), vec2(o, o)];
+        // cheap bounding boxes so most polygon tests can be skipped
+        let bbox = |pl: &Vec<Vec2>| -> (Vec2, Vec2) {
+            let mut lo = vec2(f32::MAX, f32::MAX);
+            let mut hi = vec2(f32::MIN, f32::MIN);
+            for v in pl {
+                lo = lo.min(*v);
+                hi = hi.max(*v);
+            }
+            (lo, hi)
+        };
+        let land_bb: Vec<(Vec2, Vec2)> = land_polys.iter().map(|p| bbox(p)).collect();
+        let sea_bb: Vec<(Vec2, Vec2)> = sea_polys.iter().map(|p| bbox(p)).collect();
+        let hit = |pl: &Vec<Vec2>, bb: &(Vec2, Vec2), q: Vec2| -> bool {
+            q.x >= bb.0.x && q.x <= bb.1.x && q.y >= bb.0.y && q.y <= bb.1.y && inside(pl, q)
+        };
         let mut region = vec![255u8; provs.len()];
         for (idx, p) in provs.iter_mut().enumerate() {
             let mut cnt = 0;
             let mut hits = vec![0u8; land_polys.len()];
             for o in offs {
                 let q = p.pos + o;
-                if sea_polys.iter().any(|pl| inside(pl, q)) {
+                if (0..sea_polys.len()).any(|k| hit(&sea_polys[k], &sea_bb[k], q)) {
                     continue;
                 }
-                if let Some(k) = land_polys.iter().position(|pl| inside(pl, q)) {
+                if let Some(k) = (0..land_polys.len()).position(|k| hit(&land_polys[k], &land_bb[k], q)) {
                     hits[k] += 1;
                     cnt += 1;
                 }
@@ -149,10 +175,10 @@ impl Game {
                 for dy in -2..=2i32 {
                     for dx in -2..=2i32 {
                         let (c, r) = (cx + dx, cy + dy);
-                        if c < 0 || r < 0 || c >= COLS as i32 || r >= ROWS as i32 {
+                        if c < 0 || r < 0 || c >= cols as i32 || r >= rows as i32 {
                             continue;
                         }
-                        let i = r as usize * COLS + c as usize;
+                        let i = r as usize * cols + c as usize;
                         let d = provs[i].pos.distance_squared(p);
                         if d < bd {
                             bd = d;
@@ -190,7 +216,7 @@ impl Game {
         // sea lanes: connect continents (minimum spanning tree + close neighbours)
         let mut members: Vec<Vec<usize>> = vec![vec![]; nc];
         for (i, &c) in comp.iter().enumerate() {
-            if c != usize::MAX {
+            if c != usize::MAX && provs[i].coast {
                 members[c].push(i);
             }
         }
@@ -295,6 +321,11 @@ impl Game {
             result: None,
             toast: String::new(),
             toast_t: 0.0,
+            mode: 0,
+            roy: crate::royale::Royale::new(),
+            flush_t: 0.0,
+            fresh: true,
+            cols,
         };
         for c in 0..NC {
             let owned: Vec<usize> = (0..g.provs.len()).filter(|&i| !g.provs[i].sea && g.provs[i].owner == c).collect();
