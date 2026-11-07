@@ -7,7 +7,7 @@ pub const ROWS: usize = 140;
 pub const CELL: f32 = 2400.0 / 280.0; // width of one province in map tiles
 
 pub const NEUTRAL: usize = usize::MAX;
-pub const ATTACK: [f32; 4] = [0.0, 0.25, 0.5, 1.0]; // share of troops you are willing to throw at an enemy
+pub const DEAD: usize = usize::MAX - 1; // land swallowed by the storm
 
 // unit types: 0 = Infantry, 1 = Artillery, 2 = Tank
 pub const KIND_NAMES: [&str; 3] = ["Infantry", "Artillery", "Tank"];

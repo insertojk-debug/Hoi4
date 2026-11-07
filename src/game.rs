@@ -1,5 +1,5 @@
 use macroquad::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use crate::royale::Royale;
 use crate::world::*;
@@ -14,9 +14,10 @@ pub struct Prov {
     pub sea_adj: Vec<usize>,              // sea lanes to other continents (slow)
 }
 
-// your soldiers (bots expand with plain troop numbers instead)
+// soldiers of any player (yours have owner 0)
 pub struct Army {
     pub id: u32,
+    pub owner: usize,
     pub kind: usize,
     pub size: f32,
     pub prov: usize,
@@ -32,7 +33,6 @@ pub struct Game {
     pub next_id: u32,
     pub sel_army: Option<u32>,
     pub menu: Option<usize>, // province whose train menu is open
-    pub garrison: HashMap<usize, f32>, // defensive strength of your soldiers per province
     pub img: Image,
     pub tex: Texture2D,
     pub dirty: bool,
@@ -46,10 +46,10 @@ pub struct Game {
 }
 
 impl Game {
-    pub fn spawn(&mut self, prov: usize, size: f32, kind: usize) {
+    pub fn spawn(&mut self, owner: usize, prov: usize, size: f32, kind: usize) {
         let id = self.next_id;
         self.next_id += 1;
-        self.armies.push(Army { id, kind, size, prov, path: VecDeque::new(), prog: 0.0 });
+        self.armies.push(Army { id, owner, kind, size, prov, path: VecDeque::new(), prog: 0.0 });
     }
 
     fn paint_prov(&mut self, p: usize) {
@@ -129,7 +129,7 @@ impl Game {
                 return Some(path);
             }
             for &v in self.provs[u].adj.iter().chain(self.provs[u].sea_adj.iter()) {
-                if !seen[v] && !self.provs[v].sea {
+                if !seen[v] && !self.provs[v].sea && self.provs[v].owner != DEAD {
                     seen[v] = true;
                     prev[v] = u;
                     q.push_back(v);
@@ -139,20 +139,20 @@ impl Game {
         None
     }
 
-    pub fn can_afford(&self, kind: usize) -> bool {
-        self.roy.players[0].troops >= TCOST[kind]
+    pub fn can_afford(&self, owner: usize, kind: usize) -> bool {
+        self.roy.players[owner].troops >= TCOST[kind]
     }
 
-    // train a soldier in one of your provinces; it costs troops
-    pub fn recruit(&mut self, p: usize, kind: usize) -> bool {
-        if !self.can_afford(kind) {
+    // train a soldier in one of a player's provinces; it costs troops
+    pub fn recruit(&mut self, owner: usize, p: usize, kind: usize) -> bool {
+        if !self.can_afford(owner, kind) {
             return false;
         }
-        self.roy.players[0].troops -= TCOST[kind];
-        if let Some(a) = self.armies.iter_mut().find(|a| a.prov == p && a.kind == kind && a.path.is_empty()) {
+        self.roy.players[owner].troops -= TCOST[kind];
+        if let Some(a) = self.armies.iter_mut().find(|a| a.owner == owner && a.prov == p && a.kind == kind && a.path.is_empty()) {
             a.size += 10.0;
         } else {
-            self.spawn(p, 10.0, kind);
+            self.spawn(owner, p, 10.0, kind);
         }
         true
     }
@@ -166,7 +166,7 @@ impl Game {
     pub fn tap_map(&mut self, p: usize) -> bool {
         self.menu = None;
         // one of your soldiers here: select it (tap again to deselect)
-        let own_here = self.armies.iter().find(|a| a.prov == p).map(|a| a.id);
+        let own_here = self.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
         if let Some(id) = own_here {
             self.sel_army = if self.sel_army == Some(id) { None } else { Some(id) };
             return true;

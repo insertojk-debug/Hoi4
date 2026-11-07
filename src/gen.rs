@@ -274,7 +274,6 @@ impl Game {
             next_id: 1,
             sel_army: None,
             menu: None,
-            garrison: std::collections::HashMap::new(),
             img,
             tex,
             dirty: false,

@@ -1,5 +1,6 @@
 use macroquad::prelude::*;
 
+mod ai;
 mod coast;
 mod game;
 mod gen;
@@ -11,8 +12,8 @@ use game::*;
 use world::*;
 
 const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
-// bottom bar: PLAY/PAUSE, SPEED, ATTACK, ZOOM+, ZOOM-
-const BW: [f32; 5] = [1.2, 1.2, 1.9, 0.7, 0.7];
+// bottom bar: PLAY/PAUSE, SPEED, ZOOM+, ZOOM-
+const BW: [f32; 4] = [1.4, 1.4, 0.8, 0.8];
 
 struct Lay {
     fs: f32,
@@ -152,7 +153,7 @@ async fn main() {
                     let (p, rects) = (g.menu.unwrap(), menu_rects.unwrap());
                     for k in 0..3 {
                         if rects[k].contains(vec2(mx, my)) {
-                            if g.recruit(p, k) {
+                            if g.recruit(0, p, k) {
                                 g.say(&format!("{} trained", KIND_NAMES[k]));
                                 g.menu = None;
                             } else {
@@ -162,7 +163,7 @@ async fn main() {
                     }
                 } else if my > sh - l.bar {
                     let mut bi = 0;
-                    for i in 0..5 {
+                    for i in 0..4 {
                         let (x, w) = button_x(sw, i);
                         if mx >= x && mx < x + w {
                             bi = i;
@@ -171,8 +172,7 @@ async fn main() {
                     match bi {
                         0 => g.paused = !g.paused,
                         1 => g.speed_i = (g.speed_i + 1) % SPEEDS.len(),
-                        2 => g.roy.attack = (g.roy.attack + 1) % ATTACK.len(),
-                        3 => zoom = (zoom * 1.4).clamp(1.0, 24.0),
+                        2 => zoom = (zoom * 1.4).clamp(1.0, 24.0),
                         _ => zoom = (zoom / 1.4).clamp(1.0, 24.0),
                     }
                 } else if my > l.top {
@@ -261,6 +261,16 @@ async fn main() {
                 }
             }
         }
+        // the safe zone
+        {
+            let c = to_screen(g.roy.center);
+            // the last safe spot: the final winner is whoever owns it
+            draw_circle_lines(c.x, c.y, (l.fs * 0.8).max(CELL * 2.0 * scale), 3.0, WHITE);
+            draw_circle(c.x, c.y, l.fs * 0.15, WHITE);
+            if g.roy.zone_r < g.roy.r0 * 0.995 {
+                draw_circle_lines(c.x, c.y, g.roy.zone_r * scale, 3.0, Color::new(1.0, 0.3, 0.3, 0.9));
+            }
+        }
         // where you are steering your expansion
         if let Some(f) = g.roy.focus {
             let c = to_screen(g.provs[f].pos);
@@ -278,8 +288,7 @@ async fn main() {
                 }
             }
         }
-        // soldiers
-        let my_col = g.roy.players[0].color;
+        // soldiers (yours and the bots')
         let cell = CELL * scale;
         let bw = (cell * 0.95).min(l.fs * 2.2);
         let bh = bw * 0.6;
@@ -291,18 +300,23 @@ async fn main() {
                 continue; // at most three boxes per province
             }
             let c = to_screen(g.provs[a.prov].pos);
+            if c.x < -bw || c.x > sw + bw || c.y < l.top - bh || c.y > sh {
+                continue; // off screen
+            }
+            let col = royale::owner_color(&g, a.owner);
             let selected = g.sel_army == Some(a.id);
             if bw < l.fs * 0.9 {
                 // zoomed out: just a marker
                 let m = (bw * 0.9).max(5.0);
-                draw_rectangle(c.x - m / 2.0 + k * 2.0, c.y - m / 2.0, m, m, my_col);
+                draw_rectangle(c.x - m / 2.0 + k * 2.0, c.y - m / 2.0, m, m, col);
                 draw_rectangle_lines(c.x - m / 2.0, c.y - m / 2.0, m, m, if selected { 3.0 } else { 1.0 }, if selected { RED } else { BLACK });
                 continue;
             }
             let x = c.x - bw / 2.0 + k * (bw + 4.0);
             let y = c.y - bh / 2.0;
-            draw_rectangle(x, y, bw, bh, Color::new(my_col.r * 0.55, my_col.g * 0.55, my_col.b * 0.55, 1.0));
-            draw_rectangle_lines(x, y, bw, bh, if selected { 5.0 } else { 2.0 }, if selected { YELLOW } else { WHITE });
+            draw_rectangle(x, y, bw, bh, Color::new(col.r * 0.55, col.g * 0.55, col.b * 0.55, 1.0));
+            let mine = a.owner == 0;
+            draw_rectangle_lines(x, y, bw, bh, if selected { 5.0 } else if mine { 3.0 } else { 1.5 }, if selected { YELLOW } else { WHITE });
             ctext(&format!("{}{}", KIND_LETTER[a.kind], a.size as i32), x + bw / 2.0, y + bh / 2.0, bh * 0.8, WHITE);
         }
 
@@ -316,7 +330,7 @@ async fn main() {
             draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(0.6, 0.65, 0.8, 1.0));
             for k in 0..3 {
                 let r = rects[k];
-                let ok = g.can_afford(k);
+                let ok = g.can_afford(0, k);
                 let bg = if ok { Color::new(0.22, 0.30, 0.45, 1.0) } else { Color::new(0.20, 0.20, 0.22, 1.0) };
                 let fg = if ok { WHITE } else { Color::new(0.55, 0.55, 0.58, 1.0) };
                 draw_rectangle(r.x, r.y, r.w, r.h, bg);
@@ -330,11 +344,9 @@ async fn main() {
 
         // bottom bar
         draw_rectangle(0.0, sh - l.bar, sw, l.bar, Color::new(0.1, 0.1, 0.14, 1.0));
-        let a = (ATTACK[g.roy.attack] * 100.0) as i32;
         let labels = [
             if g.paused { "> PLAY".to_string() } else { "|| PAUSE".to_string() },
             format!("SPEED x{}", SPEEDS[g.speed_i] as i32),
-            if a == 0 { "ATTACK OFF".to_string() } else { format!("ATTACK {}%", a) },
             "+".to_string(),
             "-".to_string(),
         ];
