@@ -25,11 +25,14 @@ pub fn step(g: &mut Game) {
         };
         let here = g.provs[pv].owner;
         let fighting = occ.get(&pv).map_or(false, |v| v.iter().any(|&j| g.armies[j].owner != o));
-        if (here != o && here != NEUTRAL) || fighting {
+        // a soldier stuck in a fight may retreat to its own land or free land, but cannot push on
+        let advancing = g.provs[nx].owner != o && g.provs[nx].owner != NEUTRAL;
+        if advancing && ((here != o && here != NEUTRAL) || fighting) {
             continue; // still fighting for this province
         }
         let base = if g.provs[pv].sea_adj.contains(&nx) { 0.06 } else { 0.15 };
-        g.armies[i].prog += base * SPD[g.armies[i].kind];
+        let retreating = !advancing && here != o && here != NEUTRAL;
+        g.armies[i].prog += if retreating { 1.0 } else { base * SPD[g.armies[i].kind] }; // pulling out of enemy land is instant
         if g.armies[i].prog >= 0.999 {
             g.armies[i].prog = 0.0;
             g.armies[i].path.pop_front();

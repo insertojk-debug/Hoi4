@@ -187,6 +187,11 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
     if !g.tap_map(p) {
         // not a soldier and not your own land: steer where your territory grows
         g.roy.focus = if g.roy.focus == Some(p) { None } else { Some(p) };
+        let d = g.provs[p].owner;
+        if d < PLAYERS {
+            let dens = g.roy.players[d].troops / g.roy.players[d].land.max(1) as f32;
+            g.say(&format!("Bot {}: {} provinces, {:.0} troops each (need strength {:.0})", d, g.roy.players[d].land, dens, dens * 0.8));
+        }
     }
     None
 }

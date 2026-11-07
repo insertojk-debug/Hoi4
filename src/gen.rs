@@ -274,6 +274,7 @@ impl Game {
             next_id: 1,
             sel_army: None,
             menu: None,
+            warn: None,
             img,
             tex,
             dirty: false,
