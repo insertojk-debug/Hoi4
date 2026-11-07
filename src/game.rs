@@ -33,7 +33,6 @@ pub struct Game {
     pub next_id: u32,
     pub sel_army: Option<u32>,
     pub menu: Option<usize>, // province whose train menu is open
-    pub warn: Option<(u32, usize)>, // an attack you were warned about: tap the same target again to go anyway
     pub img: Image,
     pub tex: Texture2D,
     pub dirty: bool,
@@ -166,8 +165,6 @@ impl Game {
     // returns false when the tap was not about your soldiers or your own land
     pub fn tap_map(&mut self, p: usize) -> bool {
         self.menu = None;
-        let was_warned = self.warn;
-        self.warn = was_warned.filter(|w| w.1 == p); // a warning only counts for the same target
         // one of your soldiers here: select it (tap again to deselect)
         let own_here = self.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
         if let Some(id) = own_here {
@@ -184,16 +181,10 @@ impl Game {
             if let Some((f, power)) = from {
                 match self.bfs(f, |q| q == p) {
                     Some(path) => {
-                        // the first enemy province on the way is where it will fight
-                        let foe = path.iter().map(|&q| self.provs[q].owner).find(|&o| o != 0 && o != NEUTRAL && o != DEAD);
-                        if let Some(d) = foe {
-                            let dens = self.roy.players[d].troops / self.roy.players[d].land.max(1) as f32;
-                            let need = dens * 0.8;
-                            if power < need && self.warn != Some((id, p)) {
-                                self.warn = Some((id, p));
-                                self.say(&format!("Too weak! Need strength {:.0}, you have {:.0}. Tap again to attack anyway", need, power));
-                                return true;
-                            }
+                        // tell the player what they are walking into
+                        let foe: f32 = self.armies.iter().filter(|a| a.prov == p && a.owner != 0).map(|a| a.size * ATK[a.kind]).sum();
+                        if foe > 0.0 {
+                            self.say(&format!("Attacking enemy soldiers: strength {:.0} vs your {:.0}", foe, power));
                         }
                         if let Some(a) = self.armies.iter_mut().find(|a| a.id == id) {
                             a.path = path;

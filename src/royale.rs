@@ -4,8 +4,8 @@ use crate::game::*;
 use crate::world::*;
 
 pub const PLAYERS: usize = 501; // you + 500 bots
-const STORM_START: u32 = 3000; // tick when the safe zone starts to shrink
-const STORM_END: u32 = 11000; // tick when it has shrunk to a single province
+const STORM_START: u32 = 4000; // tick when the safe zone starts to shrink
+const STORM_END: u32 = 12000; // tick when it has shrunk to a single province
 const EXPAND_P: i32 = 6; // % chance per action that nearby free land is claimed (slow natural spread)
 
 pub struct Player {
@@ -189,8 +189,9 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
         g.roy.focus = if g.roy.focus == Some(p) { None } else { Some(p) };
         let d = g.provs[p].owner;
         if d < PLAYERS {
-            let dens = g.roy.players[d].troops / g.roy.players[d].land.max(1) as f32;
-            g.say(&format!("Bot {}: {} provinces, {:.0} troops each (need strength {:.0})", d, g.roy.players[d].land, dens, dens * 0.8));
+            let foe: f32 = g.armies.iter().filter(|a| a.prov == p && a.owner == d).map(|a| a.size * ATK[a.kind]).sum();
+            let msg = if foe > 0.0 { format!("Bot {}: defended, strength {:.0}", d, foe) } else { format!("Bot {}: undefended - send a soldier!", d) };
+            g.say(&msg);
         }
     }
     None

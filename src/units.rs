@@ -5,7 +5,7 @@ use crate::game::*;
 use crate::royale::{claim, eliminate, release};
 use crate::world::*;
 
-fn occupancy(g: &Game) -> HashMap<usize, Vec<usize>> {
+pub fn occupancy(g: &Game) -> HashMap<usize, Vec<usize>> {
     let mut m: HashMap<usize, Vec<usize>> = HashMap::new();
     for (i, a) in g.armies.iter().enumerate() {
         m.entry(a.prov).or_default().push(i);
@@ -13,7 +13,7 @@ fn occupancy(g: &Game) -> HashMap<usize, Vec<usize>> {
     m
 }
 
-// one tick for every soldier: marching, taking free land, fighting each other, wearing down enemy provinces
+// one tick for every soldier: marching, taking land, fighting each other
 pub fn step(g: &mut Game) {
     // marching: slow, faster for tanks, sea lanes are slower still
     let occ = occupancy(g);
@@ -52,7 +52,7 @@ pub fn step(g: &mut Game) {
         for &i in v {
             for &j in v {
                 if g.armies[i].owner != g.armies[j].owner {
-                    let mut d = g.armies[i].size * 0.12 * ATK[g.armies[i].kind] * rand::gen_range(0.7f32, 1.3f32);
+                    let mut d = g.armies[i].size * 0.15 * ATK[g.armies[i].kind] * rand::gen_range(0.7f32, 1.3f32);
                     d /= DEF[g.armies[j].kind];
                     if g.armies[j].owner == g.provs[*p].owner {
                         d *= 0.75; // defender bonus
@@ -66,7 +66,7 @@ pub fn step(g: &mut Game) {
         g.armies[i].size -= dmg[i];
     }
     g.armies.retain(|a| a.size >= 1.0);
-    // a soldier alone in an enemy province takes it if it is strong enough compared to the troops defending each province
+    // a soldier standing on enemy land with no enemy soldiers around simply takes it
     let occ = occupancy(g);
     let mut dead: Vec<usize> = Vec::new();
     for i in 0..g.armies.len() {
@@ -76,27 +76,12 @@ pub fn step(g: &mut Game) {
             continue;
         }
         if occ[&p].iter().any(|&j| g.armies[j].owner != o) {
-            continue; // other soldiers are in the way
+            continue; // enemy soldiers are still here: keep fighting
         }
-        let k = g.armies[i].kind;
-        let land = g.roy.players[d].land.max(1) as f32;
-        let dens = g.roy.players[d].troops / land; // how many troops defend each of their provinces
-        let power = g.armies[i].size * ATK[k];
-        if power >= dens * 0.8 {
-            // strong enough: the province falls, its defenders are wiped out and the winner loots some troops
-            g.armies[i].size -= dens * 0.3 / DEF[k];
-            g.roy.players[d].troops = (g.roy.players[d].troops - dens * 2.0).max(0.0);
-            let cap = 40.0 * g.roy.players[o].land as f32 + 100.0;
-            g.roy.players[o].troops = (g.roy.players[o].troops + dens).min(cap);
-            release(g, p, d);
-            claim(g, p, o);
-            if g.roy.players[d].land == 0 {
-                dead.push(d); // removed after the loop so the army list stays intact
-            }
-        } else {
-            // repelled: the attacker bleeds every tick it stays
-            g.armies[i].size -= dens * 0.25 / DEF[k];
-            g.roy.players[d].troops = (g.roy.players[d].troops - power * 0.3).max(0.0);
+        release(g, p, d);
+        claim(g, p, o);
+        if g.roy.players[d].land == 0 {
+            dead.push(d); // removed after the loop so the army list stays intact
         }
     }
     for d in dead {
