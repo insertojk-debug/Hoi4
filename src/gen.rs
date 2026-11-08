@@ -266,6 +266,7 @@ impl Game {
         let img = Image::gen_image_color(MW as u16, MH as u16, BLACK);
         let tex = Texture2D::from_image(&img);
         tex.set_filter(FilterMode::Nearest);
+        let np = provs.len();
         Game {
             provs,
             tile,
@@ -274,6 +275,8 @@ impl Game {
             next_id: 1,
             sel_army: None,
             menu: None,
+            bld: vec![0u8; np],
+            bld_done: vec![0u32; np],
             img,
             tex,
             dirty: false,

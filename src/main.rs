@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 
 mod ai;
 mod coast;
+mod econ;
 mod game;
 mod gen;
 mod royale;
@@ -11,7 +12,6 @@ mod world;
 use game::*;
 use world::*;
 
-const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
 // bottom bar: PLAY/PAUSE, SPEED, ZOOM+, ZOOM-
 const BW: [f32; 4] = [1.4, 1.4, 0.8, 0.8];
 
@@ -45,25 +45,58 @@ fn button_x(sw: f32, i: usize) -> (f32, f32) {
     (x, BW[i] / total * sw)
 }
 
-// the train menu: three unit buttons next to a province on screen
-fn menu_layout(l: &Lay, sw: f32, sh: f32, anchor: Vec2) -> [Rect; 3] {
-    let bw = (l.fs * 5.2).min((sw - 40.0) / 3.2);
-    let bh = l.fs * 3.3;
+// the build / train menu: a panel with a header and up to three buttons, placed next to a tile
+fn menu_layout(l: &Lay, sw: f32, sh: f32, anchor: Vec2, n: usize, header_w: f32) -> (Rect, Vec<Rect>) {
+    let bw = (l.fs * 6.6).min((sw - 40.0) / 3.3);
+    let bh = l.fs * 3.6;
     let gap = l.fs * 0.35;
-    let total = bw * 3.0 + gap * 2.0;
-    let x0 = (anchor.x - total / 2.0).clamp(gap + 4.0, (sw - total - gap - 4.0).max(gap + 4.0));
-    let mut y0 = anchor.y - bh - l.fs * 1.6;
-    if y0 < l.top + gap + 4.0 {
-        y0 = anchor.y + l.fs * 1.6;
+    let hh = l.fs * 1.5;
+    let items_w = if n > 0 { n as f32 * bw + (n as f32 - 1.0) * gap } else { 0.0 };
+    let pw = (items_w.max(header_w) + gap * 2.0).min(sw - 8.0);
+    let ph = hh + if n > 0 { bh + gap } else { 0.0 } + gap * 0.5;
+    let x0 = (anchor.x - pw / 2.0).clamp(4.0, (sw - pw - 4.0).max(4.0));
+    let mut y0 = anchor.y - ph - l.fs * 1.2;
+    if y0 < l.top + 4.0 {
+        y0 = anchor.y + l.fs * 1.2;
     }
-    y0 = y0.clamp(l.top + gap + 4.0, sh - l.bar - bh - gap - 4.0);
-    [0, 1, 2].map(|k| Rect::new(x0 + k as f32 * (bw + gap), y0, bw, bh))
+    y0 = y0.clamp(l.top + 4.0, (sh - l.bar - ph - 4.0).max(l.top + 4.0));
+    let panel = Rect::new(x0, y0, pw, ph);
+    let start = x0 + (pw - items_w) / 2.0;
+    let items = (0..n).map(|k| Rect::new(start + k as f32 * (bw + gap), y0 + hh, bw, bh)).collect();
+    (panel, items)
 }
 
-fn in_menu(r: &[Rect; 3], gap: f32, m: Vec2) -> bool {
-    let (x0, y0) = (r[0].x - gap, r[0].y - gap);
-    let (x1, y1) = (r[2].x + r[2].w + gap, r[0].y + r[0].h + gap);
-    m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1
+// where each soldier's box is drawn: up to three side by side under the tile centre
+fn soldier_rects(g: &Game, to_screen: &dyn Fn(Vec2) -> Vec2, cell: f32, fs: f32, sw: f32, sh: f32, top: f32) -> Vec<(usize, Rect)> {
+    let marker = cell < fs * 0.7;
+    let bw = (cell * 0.6).clamp(fs * 0.9, fs * 2.2);
+    let bh = bw * 0.75;
+    let mut n_at = vec![0u8; g.provs.len()];
+    for a in &g.armies {
+        n_at[a.prov] = n_at[a.prov].saturating_add(1);
+    }
+    let mut k_at = vec![0u8; g.provs.len()];
+    let mut out = Vec::new();
+    for (i, a) in g.armies.iter().enumerate() {
+        let k = k_at[a.prov] as usize;
+        k_at[a.prov] = k_at[a.prov].saturating_add(1);
+        if k >= 6 {
+            continue;
+        }
+        let c = to_screen(g.provs[a.prov].pos);
+        if c.x < -bw * 4.0 || c.x > sw + bw * 4.0 || c.y < top - bh || c.y > sh + bh {
+            continue; // off screen
+        }
+        if marker {
+            let m = (cell * 0.8).max(6.0);
+            out.push((i, Rect::new(c.x - m / 2.0 + k as f32 * 2.0, c.y - m / 2.0, m, m)));
+        } else {
+            let n = n_at[a.prov].min(6) as f32;
+            let total = n * bw + (n - 1.0) * 3.0;
+            out.push((i, Rect::new(c.x - total / 2.0 + k as f32 * (bw + 3.0), c.y + cell * 0.08, bw, bh)));
+        }
+    }
+    out
 }
 
 fn conf() -> Conf {
@@ -105,7 +138,7 @@ async fn main() {
                 DrawTextureParams { dest_size: Some(vec2(MW as f32 * sc, MH as f32 * sc)), ..Default::default() },
             );
             ctext("WORLD CONQUEST", sw / 2.0, sh * 0.2, l.fs * 2.6, WHITE);
-            ctext("Pick where you start, grow your land, train an army,", sw / 2.0, sh * 0.31, l.fs * 0.9, GRAY);
+            ctext("Pick your capital, build factories, train soldiers,", sw / 2.0, sh * 0.31, l.fs * 0.9, GRAY);
             ctext("and outlast 500 rival nations.", sw / 2.0, sh * 0.31 + l.fs * 1.2, l.fs * 0.9, GRAY);
             let (bw, bh) = ((sw * 0.7).min(l.fs * 20.0), l.fs * 3.6);
             let (x, y) = (sw / 2.0 - bw / 2.0, sh * 0.55);
@@ -122,6 +155,10 @@ async fn main() {
             next_frame().await;
             continue;
         }
+
+        let scale = l.base * zoom;
+        let cell = CELL * scale;
+        let to_screen = move |p: Vec2| vec2(sw / 2.0 + (p.x - cam.x) * scale, mid_y + (p.y - cam.y) * scale);
 
         // ---- input ----
         let (_, wy) = mouse_wheel();
@@ -141,27 +178,31 @@ async fn main() {
         } else {
             pinch_prev = None;
             if is_mouse_button_pressed(MouseButton::Left) {
-                let sc = l.base * zoom;
-                let menu_rects = g.menu.map(|p| {
-                    let a = vec2(sw / 2.0 + (g.provs[p].pos.x - cam.x) * sc, mid_y + (g.provs[p].pos.y - cam.y) * sc);
-                    menu_layout(&l, sw, sh, a)
+                let mouse = vec2(mx, my);
+                let menu_geo = g.menu.map(|p| {
+                    let info = g.menu_content(p);
+                    let hw = measure_text(&info.header, None, (l.fs * 0.9) as u16, 1.0).width + l.fs;
+                    let (panel, items) = menu_layout(&l, sw, sh, to_screen(g.provs[p].pos), info.items.len(), hw);
+                    (p, panel, items)
                 });
                 if g.roy.over.is_some() {
                     screen = 0;
-                } else if menu_rects.map_or(false, |r| in_menu(&r, l.fs * 0.35, vec2(mx, my))) {
-                    // a tap inside the train menu
-                    let (p, rects) = (g.menu.unwrap(), menu_rects.unwrap());
-                    for k in 0..3 {
-                        if rects[k].contains(vec2(mx, my)) {
-                            if g.recruit(0, p, k) {
-                                g.say(&format!("{} trained", KIND_NAMES[k]));
-                                g.menu = None;
-                            } else {
-                                g.say("Not enough troops");
+                } else if menu_geo.as_ref().map_or(false, |m| m.1.contains(mouse)) {
+                    // a tap inside the menu
+                    let (p, _, items) = menu_geo.unwrap();
+                    for (k, r) in items.iter().enumerate() {
+                        if r.contains(mouse) {
+                            match g.menu_pick(p, k) {
+                                Ok(msg) => {
+                                    g.say(&msg);
+                                    g.menu = None;
+                                }
+                                Err(e) => g.say(e),
                             }
                         }
                     }
                 } else if my > sh - l.bar {
+                    g.menu = None;
                     let mut bi = 0;
                     for i in 0..4 {
                         let (x, w) = button_x(sw, i);
@@ -176,12 +217,11 @@ async fn main() {
                         _ => zoom = (zoom / 1.4).clamp(1.0, 24.0),
                     }
                 } else if my > l.top {
-                    press = Some((vec2(mx, my), cam));
+                    press = Some((mouse, cam));
                     moved = false;
                 }
             }
             if let Some((start, cam0)) = press {
-                let scale = l.base * zoom;
                 if is_mouse_button_down(MouseButton::Left) {
                     let delta = vec2(mx, my) - start;
                     if delta.length() > l.fs * 0.4 {
@@ -192,13 +232,28 @@ async fn main() {
                     }
                 }
                 if is_mouse_button_released(MouseButton::Left) {
-                    if !moved {
+                    if !moved && g.roy.started && g.roy.over.is_none() {
+                        // a tap on one of your soldiers selects that soldier
+                        let rects = soldier_rects(&g, &to_screen, cell, l.fs, sw, sh, l.top);
+                        let mouse = vec2(mx, my);
+                        let hit = rects.iter().rev().find(|(i, r)| g.armies[*i].owner == 0 && r.contains(mouse)).map(|(i, _)| g.armies[*i].id);
+                        if let Some(id) = hit {
+                            g.sel_army = if g.sel_army == Some(id) { None } else { Some(id) };
+                            g.menu = None;
+                            press = None;
+                        }
+                    }
+                    if press.is_some() && !moved {
                         let tx = ((mx - sw / 2.0) / scale + cam.x).floor();
                         let ty = ((my - mid_y) / scale + cam.y).floor();
                         if tx >= 0.0 && ty >= 0.0 && (tx as usize) < MW && (ty as usize) < MH {
                             let p = g.tile[ty as usize * MW + tx as usize] as usize;
-                            if let Some(sp) = royale::tap(&mut g, p) {
-                                cam = g.provs[sp].pos; // jump to your spawn
+                            // zoomed far out the soldier boxes are tiny: a tap on the tile picks its first soldier
+                            let first = g.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
+                            if g.roy.started && cell < l.fs * 0.7 && g.sel_army.is_none() && first.is_some() {
+                                g.sel_army = first;
+                            } else if let Some(sp) = royale::tap(&mut g, p) {
+                                cam = g.provs[sp].pos; // jump to your capital
                                 zoom = 9.0;
                             }
                         }
@@ -238,6 +293,8 @@ async fn main() {
         }
 
         // ---- draw ----
+        let cell = CELL * scale;
+        let to_screen = move |p: Vec2| vec2(sw / 2.0 + (p.x - cam.x) * scale, mid_y + (p.y - cam.y) * scale);
         clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
         draw_texture_ex(
             &g.tex,
@@ -249,7 +306,6 @@ async fn main() {
                 ..Default::default()
             },
         );
-        let to_screen = |p: Vec2| vec2(sw / 2.0 + (p.x - cam.x) * scale, mid_y + (p.y - cam.y) * scale);
 
         // sea lanes
         for (a, pa) in g.provs.iter().enumerate() {
@@ -261,10 +317,9 @@ async fn main() {
                 }
             }
         }
-        // the safe zone
+        // the safe zone: a white ring marks the last safe spot, the red circle is the shrinking edge
         {
             let c = to_screen(g.roy.center);
-            // the last safe spot: the final winner is whoever owns it
             draw_circle_lines(c.x, c.y, (l.fs * 0.8).max(CELL * 2.0 * scale), 3.0, WHITE);
             draw_circle(c.x, c.y, l.fs * 0.15, WHITE);
             if g.roy.zone_r < g.roy.r0 * 0.995 {
@@ -277,6 +332,37 @@ async fn main() {
             draw_circle_lines(c.x, c.y, l.fs * 1.2, 3.0, YELLOW);
             draw_circle(c.x, c.y, l.fs * 0.2, YELLOW);
         }
+        // your capital
+        if g.roy.started {
+            let cp = g.roy.players[0].capital;
+            let c = to_screen(g.provs[cp].pos);
+            let col = if g.has_capital(0) { Color::new(1.0, 0.85, 0.2, 1.0) } else { RED };
+            draw_circle_lines(c.x, c.y, (l.fs * 0.7).max(cell * 0.6), 3.0, col);
+        }
+        // factories
+        if cell >= l.fs * 0.7 {
+            let ic = (cell * 0.42).max(l.fs * 0.55);
+            for &pu in &g.roy.land_list {
+                let p = pu as usize;
+                if g.bld[p] == 0 {
+                    continue;
+                }
+                let c = to_screen(g.provs[p].pos);
+                if c.x < -ic || c.x > sw + ic || c.y < l.top - ic || c.y > sh {
+                    continue;
+                }
+                let done = g.bld_done[p] <= g.roy.tick;
+                let (col, label) = match (g.bld[p], done) {
+                    (1, true) => (Color::new(0.95, 0.8, 0.2, 1.0), "$"),
+                    (_, true) => (Color::new(0.85, 0.3, 0.3, 1.0), "M"),
+                    _ => (Color::new(0.5, 0.5, 0.55, 1.0), ".."),
+                };
+                let r = Rect::new(c.x - ic / 2.0, c.y - cell * 0.22 - ic / 2.0, ic, ic);
+                draw_rectangle(r.x, r.y, r.w, r.h, col);
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, BLACK);
+                ctext(label, c.x, c.y - cell * 0.22, ic * 0.8, BLACK);
+            }
+        }
         // path of the selected soldier
         if let Some(id) = g.sel_army {
             if let Some(a) = g.armies.iter().find(|a| a.id == id) {
@@ -288,57 +374,40 @@ async fn main() {
                 }
             }
         }
-        // soldiers (yours and the bots')
-        let cell = CELL * scale;
-        let bw = (cell * 0.95).min(l.fs * 2.2);
-        let bh = bw * 0.6;
-        let mut stack = vec![0u8; g.provs.len()];
-        for a in g.armies.iter() {
-            let k = stack[a.prov] as f32;
-            stack[a.prov] = stack[a.prov].saturating_add(1);
-            if k >= 3.0 {
-                continue; // at most three boxes per province
-            }
-            let c = to_screen(g.provs[a.prov].pos);
-            if c.x < -bw || c.x > sw + bw || c.y < l.top - bh || c.y > sh {
-                continue; // off screen
-            }
+        // soldiers: up to three boxes side by side on a tile
+        let rects = soldier_rects(&g, &to_screen, cell, l.fs, sw, sh, l.top);
+        for (i, r) in &rects {
+            let a = &g.armies[*i];
             let col = royale::owner_color(&g, a.owner);
             let selected = g.sel_army == Some(a.id);
-            if bw < l.fs * 0.9 {
-                // zoomed out: just a marker
-                let m = (bw * 0.9).max(5.0);
-                draw_rectangle(c.x - m / 2.0 + k * 2.0, c.y - m / 2.0, m, m, col);
-                draw_rectangle_lines(c.x - m / 2.0, c.y - m / 2.0, m, m, if selected { 3.0 } else { 1.0 }, if selected { RED } else { BLACK });
+            if cell < l.fs * 0.7 {
+                draw_rectangle(r.x, r.y, r.w, r.h, col);
+                draw_rectangle_lines(r.x, r.y, r.w, r.h, if selected { 3.0 } else { 1.0 }, if selected { RED } else { BLACK });
                 continue;
             }
-            let x = c.x - bw / 2.0 + k * (bw + 4.0);
-            let y = c.y - bh / 2.0;
-            draw_rectangle(x, y, bw, bh, Color::new(col.r * 0.55, col.g * 0.55, col.b * 0.55, 1.0));
+            draw_rectangle(r.x, r.y, r.w, r.h, Color::new(col.r * 0.55, col.g * 0.55, col.b * 0.55, 1.0));
             let mine = a.owner == 0;
-            draw_rectangle_lines(x, y, bw, bh, if selected { 5.0 } else if mine { 3.0 } else { 1.5 }, if selected { YELLOW } else { WHITE });
-            ctext(&format!("{}{}", KIND_LETTER[a.kind], a.size as i32), x + bw / 2.0, y + bh / 2.0, bh * 0.8, WHITE);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, if selected { 5.0 } else if mine { 3.0 } else { 1.5 }, if selected { YELLOW } else { WHITE });
+            ctext(&format!("{}{}", KIND_LETTER[a.kind], a.size.ceil() as i32), r.x + r.w / 2.0, r.y + r.h / 2.0, r.h * 0.8, WHITE);
         }
 
-        // train menu (like Polytopia): three unit choices next to the province
+        // the build / train menu
         if let Some(p) = g.menu {
-            let rects = menu_layout(&l, sw, sh, to_screen(g.provs[p].pos));
-            let gap = l.fs * 0.35;
-            let (px, py) = (rects[0].x - gap, rects[0].y - gap);
-            let (pw, ph) = (rects[2].x + rects[2].w + gap - px, rects[0].h + gap * 2.0);
-            draw_rectangle(px, py, pw, ph, Color::new(0.05, 0.06, 0.1, 0.92));
-            draw_rectangle_lines(px, py, pw, ph, 2.0, Color::new(0.6, 0.65, 0.8, 1.0));
-            for k in 0..3 {
-                let r = rects[k];
-                let ok = g.can_afford(0, k);
-                let bg = if ok { Color::new(0.22, 0.30, 0.45, 1.0) } else { Color::new(0.20, 0.20, 0.22, 1.0) };
-                let fg = if ok { WHITE } else { Color::new(0.55, 0.55, 0.58, 1.0) };
+            let info = g.menu_content(p);
+            let hw = measure_text(&info.header, None, (l.fs * 0.9) as u16, 1.0).width + l.fs;
+            let (panel, items) = menu_layout(&l, sw, sh, to_screen(g.provs[p].pos), info.items.len(), hw);
+            draw_rectangle(panel.x, panel.y, panel.w, panel.h, Color::new(0.05, 0.06, 0.1, 0.94));
+            draw_rectangle_lines(panel.x, panel.y, panel.w, panel.h, 2.0, Color::new(0.6, 0.65, 0.8, 1.0));
+            ctext(&info.header, panel.x + panel.w / 2.0, panel.y + l.fs * 0.75, l.fs * 0.9, WHITE);
+            for (k, r) in items.iter().enumerate() {
+                let it = &info.items[k];
+                let bg = if it.ok { Color::new(0.22, 0.30, 0.45, 1.0) } else { Color::new(0.20, 0.20, 0.22, 1.0) };
+                let fg = if it.ok { WHITE } else { Color::new(0.55, 0.55, 0.58, 1.0) };
                 draw_rectangle(r.x, r.y, r.w, r.h, bg);
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, Color::new(0.75, 0.8, 0.95, 0.8));
-                ctext(KIND_NAMES[k], r.x + r.w / 2.0, r.y + r.h * 0.3, l.fs * 0.95, fg);
-                ctext(&format!("{} troops", TCOST[k] as i32), r.x + r.w / 2.0, r.y + r.h * 0.62, l.fs * 0.7, fg);
-                let note = ["balanced", "strong attack", "fast + tough"][k];
-                ctext(note, r.x + r.w / 2.0, r.y + r.h * 0.84, l.fs * 0.6, Color::new(0.8, 0.85, 0.6, if ok { 1.0 } else { 0.5 }));
+                ctext(&it.title, r.x + r.w / 2.0, r.y + r.h * 0.28, l.fs * 0.8, fg);
+                ctext(&it.line2, r.x + r.w / 2.0, r.y + r.h * 0.58, l.fs * 0.75, fg);
+                ctext(&it.line3, r.x + r.w / 2.0, r.y + r.h * 0.82, l.fs * 0.6, Color::new(0.8, 0.85, 0.6, if it.ok { 1.0 } else { 0.5 }));
             }
         }
 

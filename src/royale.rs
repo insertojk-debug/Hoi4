@@ -9,13 +9,15 @@ const STORM_END: u32 = 12000; // tick when it has shrunk to a single province
 const EXPAND_P: i32 = 6; // % chance per action that nearby free land is claimed (slow natural spread)
 
 pub struct Player {
-    pub troops: f32,
+    pub stars: f32,
     pub land: u32,
     pub alive: bool,
     pub aggr: f32,
     pub color: Color,
     pub kind: usize,  // the soldier type a bot likes to build
-    pub stage: usize, // border province where a bot masses its army
+    pub capital: usize, // the first tile: holding it lets you build and train
+    pub civ: u32,     // civilian factories (finished or being built)
+    pub mil: u32,     // military factories
 }
 
 pub struct Royale {
@@ -90,6 +92,11 @@ pub fn claim(g: &mut Game, p: usize, i: usize) {
     g.roy.slot[p] = g.roy.owned[i].len() as u32;
     g.roy.owned[i].push(p as u32);
     g.roy.players[i].land += 1;
+    match g.bld[p] {
+        1 => g.roy.players[i].civ += 1,
+        2 => g.roy.players[i].mil += 1,
+        _ => {}
+    }
     g.changed.push(p);
     g.dirty = true;
 }
@@ -102,11 +109,22 @@ pub fn release(g: &mut Game, p: usize, d: usize) {
         g.roy.slot[moved] = s as u32;
     }
     g.roy.players[d].land -= 1;
+    match g.bld[p] {
+        1 => g.roy.players[d].civ = g.roy.players[d].civ.saturating_sub(1),
+        2 => g.roy.players[d].mil = g.roy.players[d].mil.saturating_sub(1),
+        _ => {}
+    }
 }
 
 // start a fresh Territory Royale on the existing world map: all land is free, 500 bots pick spawn points
 pub fn init(g: &mut Game) {
     g.armies.clear();
+    for b in g.bld.iter_mut() {
+        *b = 0;
+    }
+    for b in g.bld_done.iter_mut() {
+        *b = 0;
+    }
     g.sel_army = None;
     g.menu = None;
     g.paused = false;
@@ -140,7 +158,7 @@ pub fn init(g: &mut Game) {
         };
         let roll = rand::gen_range(0, 100);
         let kind = if roll < 60 { 0 } else if roll < 85 { 1 } else { 2 };
-        r.players.push(Player { troops: 30.0, land: 0, alive: i != 0, aggr: rand::gen_range(0.2f32, 1.0), color, kind, stage: usize::MAX });
+        r.players.push(Player { stars: START_STARS, land: 0, alive: i != 0, aggr: rand::gen_range(0.2f32, 1.0), color, kind, capital: usize::MAX, civ: 0, mil: 0 });
     }
     r.alive = PLAYERS - 1;
     g.roy = r;
@@ -151,6 +169,7 @@ pub fn init(g: &mut Game) {
     }
     for b in 0..(PLAYERS - 1) {
         claim(g, land[b], b + 1);
+        g.roy.players[b + 1].capital = land[b];
     }
     stats(g);
     g.recolor_all();
@@ -176,16 +195,24 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
             return None;
         }
         claim(g, p, 0);
+        g.roy.players[0].capital = p;
         g.roy.players[0].alive = true;
-        g.roy.players[0].troops = 100.0;
         g.roy.alive += 1;
         g.roy.started = true;
         stats(g);
         g.flush();
         return Some(p);
     }
-    if !g.tap_map(p) {
-        // not a soldier and not your own land: steer where your territory grows
+    g.menu = None;
+    if g.tap_map(p) {
+        return None; // a selected soldier was sent there
+    }
+    if g.provs[p].owner == 0 && !g.provs[p].sea {
+        g.menu = Some(p); // your own land: build or train here
+        return None;
+    }
+    {
+        // anything else: steer where your territory grows and show what is there
         g.roy.focus = if g.roy.focus == Some(p) { None } else { Some(p) };
         let d = g.provs[p].owner;
         if d < PLAYERS {
@@ -199,7 +226,6 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
 
 pub fn eliminate(g: &mut Game, d: usize) {
     g.roy.players[d].alive = false;
-    g.roy.players[d].troops = 0.0;
     g.roy.alive -= 1;
     g.armies.retain(|a| a.owner != d);
     if d == 0 {
@@ -248,11 +274,8 @@ fn act(g: &mut Game, i: usize) {
         }
         None => cands[rand::gen_range(0, cands.len())],
     };
-    let cost = (1.0 + 0.02 * g.roy.players[i].land as f32) * if link { 3.0 } else { 1.0 };
-    if g.roy.players[i].troops >= cost + 1.0 {
-        g.roy.players[i].troops -= cost;
-        claim(g, q, i);
-    }
+    let _ = link;
+    claim(g, q, i);
 }
 
 // the safe zone shrinks around its centre; land outside it is lost for good
@@ -295,13 +318,18 @@ fn storm(g: &mut Game) {
 pub fn step(g: &mut Game) {
     g.roy.tick += 1;
     let n = g.roy.players.len();
-    for p in g.roy.players.iter_mut() {
-        if !p.alive {
-            continue;
+    // income: every civilian factory pays its owner stars each cycle
+    if g.roy.tick % CYCLE == 0 {
+        let t = g.roy.tick;
+        for k in 0..g.roy.land_list.len() {
+            let p = g.roy.land_list[k] as usize;
+            if g.bld[p] == 1 && g.bld_done[p] <= t {
+                let o = g.provs[p].owner;
+                if o < PLAYERS && g.roy.players[o].alive {
+                    g.roy.players[o].stars += INCOME;
+                }
+            }
         }
-        let max_t = 40.0 * p.land as f32 + 100.0;
-        let growth = 0.6 * p.land as f32 + 2.0 + 0.02 * p.troops * (1.0 - p.troops / max_t);
-        p.troops = (p.troops + growth).min(max_t);
     }
     let start = (g.roy.tick as usize * 7) % n;
     for k in 0..n {
@@ -333,12 +361,12 @@ pub fn draw(g: &Game, fs: f32, top: f32, sw: f32, sh: f32) {
     } else {
         let me = &r.players[0];
         format!(
-            "Alive {}/{}   Land {} ({:.1}%)   Troops {:.0}   Units {}   Rank {}   Zone {:.0}%",
+            "Alive {}/{}   Land {} ({:.1}%)   Stars {:.0}   Soldiers {}   Rank {}   Zone {:.0}%",
             r.alive,
             PLAYERS,
             me.land,
             me.land as f32 / r.total_land as f32 * 100.0,
-            me.troops,
+            me.stars,
             g.armies.iter().filter(|a| a.owner == 0).count(),
             r.rank,
             r.zone_r / r.r0 * 100.0

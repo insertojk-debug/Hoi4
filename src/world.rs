@@ -6,13 +6,24 @@ pub const COLS: usize = 280; // province grid (about 39,000 provinces, 12,800 of
 pub const ROWS: usize = 140;
 pub const CELL: f32 = 2400.0 / 280.0; // width of one province in map tiles
 
+pub const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
+
 pub const NEUTRAL: usize = usize::MAX;
 pub const DEAD: usize = usize::MAX - 1; // land swallowed by the storm
 
-// unit types: 0 = Infantry, 1 = Artillery, 2 = Tank
+// ---- economy: stars are the money ----
+pub const START_STARS: f32 = 25.0;
+pub const INCOME: f32 = 2.0; // stars one civilian factory pays each cycle
+pub const CYCLE: u32 = 10; // ticks per income cycle
+pub const BUILD_NAMES: [&str; 2] = ["Civilian Factory", "Military Factory"];
+pub const BUILD_COST: [f32; 2] = [10.0, 15.0]; // stars
+pub const BUILD_TIME: [u32; 2] = [30, 60]; // ticks to finish
+pub const MAX_STACK: usize = 3; // soldiers of one player per tile
+
+// ---- soldiers: 0 = Infantry, 1 = Artillery, 2 = Tank ----
 pub const KIND_NAMES: [&str; 3] = ["Infantry", "Artillery", "Tank"];
 pub const KIND_LETTER: [&str; 3] = ["I", "A", "T"];
-pub const TCOST: [f32; 3] = [30.0, 55.0, 90.0]; // troops it costs to train one
+pub const STAR_COST: [f32; 3] = [5.0, 8.0, 12.0];
 pub const ATK: [f32; 3] = [1.0, 1.6, 1.4];
 pub const DEF: [f32; 3] = [1.0, 0.6, 1.3];
 pub const SPD: [f32; 3] = [1.0, 0.8, 1.6];

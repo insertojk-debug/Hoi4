@@ -4,40 +4,47 @@ use crate::game::*;
 use crate::units::occupancy;
 use crate::world::*;
 
-const PEACE: u32 = 1500; // ticks before bots start building armies
-const RESERVE: f32 = 60.0; // troops a bot keeps back
+const PEACE: u32 = 1500; // bots do not attack before this tick
 
-// bots: train soldiers along their borders and send them into neighbouring land
+// bots: build factories, train soldiers, and send them into neighbouring land
 pub fn step(g: &mut Game) {
     let tick = g.roy.tick;
-    if tick < PEACE {
-        return;
-    }
     let n = g.roy.players.len();
     let mut count = vec![0u32; n];
     for a in &g.armies {
         count[a.owner] += 1;
     }
-    // training: a new soldier at a random border province
     for i in 1..n {
-        if !g.roy.players[i].alive || (tick as usize + i) % 8 != 0 {
+        if !g.roy.players[i].alive || (tick as usize + i) % 10 != 0 || !g.has_capital(i) {
             continue;
         }
-        let (land, aggr, kind) = (g.roy.players[i].land, g.roy.players[i].aggr, g.roy.players[i].kind);
-        if count[i] >= 3 + land / 4 || rand::gen_range(0.0f32, 1.0) > aggr || g.roy.players[i].troops < TCOST[kind] + RESERVE {
-            continue;
-        }
+        let (land, civ, mil, kind, aggr) = {
+            let p = &g.roy.players[i];
+            (p.land, p.civ, p.mil, p.kind, p.aggr)
+        };
         let m = g.roy.owned[i].len();
-        for _ in 0..8 {
-            let p = g.roy.owned[i][rand::gen_range(0, m)] as usize;
-            let border = g.provs[p].adj.iter().any(|&q| {
-                let o = g.provs[q].owner;
-                o != NEUTRAL && o != DEAD && o != i
-            });
-            if border {
-                g.recruit(i, p, kind);
-                count[i] += 1;
-                break;
+        // economy first: more civilian factories, plus a few military ones
+        let want_civ = civ < 2 + land / 5 && civ <= mil * 3 + 1;
+        let want_mil = mil < 1 + land / 12;
+        let build = if want_civ { Some(0) } else if want_mil { Some(1) } else { None };
+        if let Some(k) = build {
+            if g.roy.players[i].stars >= BUILD_COST[k] {
+                for _ in 0..6 {
+                    let p = g.roy.owned[i][rand::gen_range(0, m)] as usize;
+                    if g.bld[p] == 0 && g.start_build(i, p, k).is_ok() {
+                        break;
+                    }
+                }
+            }
+        }
+        // then soldiers, at a random finished military factory
+        if count[i] < 3 + land / 3 && rand::gen_range(0.0f32, 1.0) < aggr && g.roy.players[i].stars >= STAR_COST[kind] {
+            for _ in 0..10 {
+                let p = g.roy.owned[i][rand::gen_range(0, m)] as usize;
+                if g.bld[p] == 2 && g.recruit(i, p, kind).is_ok() {
+                    count[i] += 1;
+                    break;
+                }
             }
         }
     }
@@ -59,7 +66,7 @@ pub fn step(g: &mut Game) {
             let d = g.provs[q].owner;
             if d == NEUTRAL {
                 free = Some(q);
-            } else if d != o && d != DEAD {
+            } else if d != o && d != DEAD && tick >= PEACE {
                 let s = strength(g, q, o);
                 if s == 0.0 {
                     open = Some(q);

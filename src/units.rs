@@ -15,6 +15,11 @@ pub fn occupancy(g: &Game) -> HashMap<usize, Vec<usize>> {
 
 // one tick for every soldier: marching, taking land, fighting each other
 pub fn step(g: &mut Game) {
+    // how many soldiers each player has in each tile (at most MAX_STACK fit)
+    let mut cnt: HashMap<(usize, usize), usize> = HashMap::new();
+    for a in &g.armies {
+        *cnt.entry((a.owner, a.prov)).or_insert(0) += 1;
+    }
     // marching: slow, faster for tanks, sea lanes are slower still
     let occ = occupancy(g);
     for i in 0..g.armies.len() {
@@ -30,19 +35,25 @@ pub fn step(g: &mut Game) {
         if advancing && ((here != o && here != NEUTRAL) || fighting) {
             continue; // still fighting for this province
         }
-        let base = if g.provs[pv].sea_adj.contains(&nx) { 0.06 } else { 0.15 };
         let retreating = !advancing && here != o && here != NEUTRAL;
-        g.armies[i].prog += if retreating { 1.0 } else { base * SPD[g.armies[i].kind] }; // pulling out of enemy land is instant
+        let base = if g.provs[pv].sea_adj.contains(&nx) { 0.06 } else { 0.15 };
+        g.armies[i].prog += if retreating { 1.0 } else { base * SPD[g.armies[i].kind] };
         if g.armies[i].prog >= 0.999 {
+            if *cnt.get(&(o, nx)).unwrap_or(&0) >= MAX_STACK {
+                g.armies[i].prog = 0.999; // the next tile is full: wait for room
+                continue;
+            }
             g.armies[i].prog = 0.0;
             g.armies[i].path.pop_front();
             g.armies[i].prov = nx;
+            *cnt.entry((o, pv)).or_insert(1) -= 1;
+            *cnt.entry((o, nx)).or_insert(0) += 1;
             if g.provs[nx].owner == NEUTRAL && !g.provs[nx].sea {
                 claim(g, nx, o); // free land belongs to the first soldier to walk in
             }
         }
     }
-    // soldiers of different players standing in the same province fight
+    // soldiers of different players standing in the same tile fight
     let occ = occupancy(g);
     let mut dmg = vec![0f32; g.armies.len()];
     for (p, v) in occ.iter() {
@@ -89,35 +100,6 @@ pub fn step(g: &mut Game) {
             eliminate(g, d);
         }
     }
-    g.armies.retain(|a| a.size >= 1.0);
-    // merge idle soldiers of the same player and type standing together
-    let mut seen: HashMap<(usize, usize, usize), usize> = HashMap::new();
-    let mut remove = vec![false; g.armies.len()];
-    for i in 0..g.armies.len() {
-        if !g.armies[i].path.is_empty() {
-            continue;
-        }
-        let key = (g.armies[i].owner, g.armies[i].prov, g.armies[i].kind);
-        match seen.get(&key) {
-            Some(&j) => {
-                let s = g.armies[i].size;
-                g.armies[j].size += s;
-                if g.sel_army == Some(g.armies[i].id) {
-                    g.sel_army = Some(g.armies[j].id);
-                }
-                remove[i] = true;
-            }
-            None => {
-                seen.insert(key, i);
-            }
-        }
-    }
-    let mut idx = 0;
-    g.armies.retain(|_| {
-        let keep = !remove[idx];
-        idx += 1;
-        keep
-    });
     if let Some(id) = g.sel_army {
         if !g.armies.iter().any(|a| a.id == id) {
             g.sel_army = None;

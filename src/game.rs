@@ -32,7 +32,9 @@ pub struct Game {
     pub armies: Vec<Army>,
     pub next_id: u32,
     pub sel_army: Option<u32>,
-    pub menu: Option<usize>, // province whose train menu is open
+    pub menu: Option<usize>, // province whose build / train menu is open
+    pub bld: Vec<u8>,        // per province: 0 nothing, 1 civilian factory, 2 military factory
+    pub bld_done: Vec<u32>,  // tick at which that building is finished
     pub img: Image,
     pub tex: Texture2D,
     pub dirty: bool,
@@ -139,71 +141,47 @@ impl Game {
         None
     }
 
-    pub fn can_afford(&self, owner: usize, kind: usize) -> bool {
-        self.roy.players[owner].troops >= TCOST[kind]
-    }
-
-    // train a soldier in one of a player's provinces; it costs troops
-    pub fn recruit(&mut self, owner: usize, p: usize, kind: usize) -> bool {
-        if !self.can_afford(owner, kind) {
-            return false;
-        }
-        self.roy.players[owner].troops -= TCOST[kind];
-        if let Some(a) = self.armies.iter_mut().find(|a| a.owner == owner && a.prov == p && a.kind == kind && a.path.is_empty()) {
-            a.size += 10.0;
-        } else {
-            self.spawn(owner, p, 10.0, kind);
-        }
-        true
-    }
-
     pub fn say(&mut self, s: &str) {
         self.toast = s.to_string();
         self.toast_t = 2.0;
     }
 
-    // returns false when the tap was not about your soldiers or your own land
+    // a soldier is selected: send it to the tapped province. Returns false if no soldier is selected.
     pub fn tap_map(&mut self, p: usize) -> bool {
-        self.menu = None;
-        // one of your soldiers here: select it (tap again to deselect)
-        let own_here = self.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
-        if let Some(id) = own_here {
-            self.sel_army = if self.sel_army == Some(id) { None } else { Some(id) };
+        let id = match self.sel_army {
+            Some(id) => id,
+            None => return false,
+        };
+        if self.provs[p].sea || self.provs[p].owner == DEAD {
+            self.say("Can't go there");
             return true;
         }
-        // a soldier is selected: send it there, then let go of it so you can pick the next one right away
-        if let Some(id) = self.sel_army {
-            if self.provs[p].sea || self.provs[p].owner == DEAD {
-                self.say("Can't go there");
+        let from = self.armies.iter().find(|a| a.id == id).map(|a| (a.prov, a.size * ATK[a.kind]));
+        let (f, power) = match from {
+            Some(x) => x,
+            None => {
+                self.sel_army = None;
                 return true;
             }
-            let from = self.armies.iter().find(|a| a.id == id).map(|a| (a.prov, a.size * ATK[a.kind]));
-            if let Some((f, power)) = from {
-                match self.bfs(f, |q| q == p) {
-                    Some(path) => {
-                        // tell the player what they are walking into
-                        let foe: f32 = self.armies.iter().filter(|a| a.prov == p && a.owner != 0).map(|a| a.size * ATK[a.kind]).sum();
-                        if foe > 0.0 {
-                            self.say(&format!("Attacking enemy soldiers: strength {:.0} vs your {:.0}", foe, power));
-                        }
-                        if let Some(a) = self.armies.iter_mut().find(|a| a.id == id) {
-                            a.path = path;
-                            a.prog = 0.0;
-                        }
-                        self.sel_army = None;
-                    }
-                    None => self.say("Unreachable"),
+        };
+        if f == p {
+            self.sel_army = None; // tapped its own tile: let go of it
+            return true;
+        }
+        match self.bfs(f, |q| q == p) {
+            Some(path) => {
+                let foe: f32 = self.armies.iter().filter(|a| a.prov == p && a.owner != 0).map(|a| a.size * ATK[a.kind]).sum();
+                if foe > 0.0 {
+                    self.say(&format!("Attacking enemy soldiers: strength {:.0} vs your {:.0}", foe, power));
                 }
-            } else {
-                self.sel_army = None;
+                if let Some(a) = self.armies.iter_mut().find(|a| a.id == id) {
+                    a.path = path;
+                    a.prog = 0.0;
+                }
+                self.sel_army = None; // let go so the next soldier can be picked right away
             }
-            return true;
+            None => self.say("Unreachable"),
         }
-        // one of your own empty provinces: open the train menu
-        if !self.provs[p].sea && self.provs[p].owner == 0 {
-            self.menu = Some(p);
-            return true;
-        }
-        false
+        true
     }
 }
