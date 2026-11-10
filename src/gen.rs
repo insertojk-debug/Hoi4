@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
 
-use crate::coast::*;
+use crate::geo;
 use crate::game::*;
 use crate::world::*;
 
@@ -29,32 +29,16 @@ fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
     }
 }
 
-fn lon_of(p: Vec2) -> f32 {
-    p.x / MW as f32 * 350.0 - 170.0
-}
-
-// may two neighbouring provinces from outlines ra / rb be linked by land?
-fn linked(ra: usize, rb: usize, pa: Vec2, pb: Vec2) -> bool {
-    if ra == rb {
-        return true;
-    }
-    let pair = |x: usize, y: usize| (ra == x && rb == y) || (ra == y && rb == x);
-    if pair(R_NAMERICA, R_SAMERICA) || pair(R_NAMERICA, R_BAJA) {
-        return true;
-    }
-    if pair(R_EURASIA, R_AFRICA) {
-        return lon_of(pa) >= 30.0 && lon_of(pb) >= 30.0; // only at Suez / Sinai
-    }
-    false
-}
-
-fn cut_regions(provs: &mut Vec<Prov>, region: &[u8]) {
+// provinces from different landmasses (islands, continents) are never land-linked,
+// and a few narrow straits inside one landmass are cut as well
+fn cut_regions(provs: &mut Vec<Prov>, region: &[u16]) {
+    let segs: Vec<(Vec2, Vec2)> = STRAITS.iter().map(|&(a, b)| (proj(a.0, a.1), proj(b.0, b.1))).collect();
     for a in 0..provs.len() {
         let pa = provs[a].pos;
         let adj = std::mem::take(&mut provs[a].adj);
         let keep: Vec<usize> = adj
             .into_iter()
-            .filter(|&b| linked(region[a] as usize, region[b] as usize, pa, provs[b].pos))
+            .filter(|&b| region[a] == region[b] && !segs.iter().any(|&(s, e)| seg_cross(pa, provs[b].pos, s, e)))
             .collect();
         provs[a].adj = keep;
     }
@@ -113,50 +97,23 @@ impl Game {
                 provs.push(Prov { pos: vec2(x, y), owner: NEUTRAL, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
             }
         }
-        // land = province whose centre (and mostly its surroundings) lies inside a continent outline
-        let to_poly = |ps: &[(f32, f32)]| -> Vec<Vec2> { ps.iter().map(|&(a, b)| proj(a, b)).collect() };
-        let land_polys: Vec<Vec<Vec2>> = LAND.iter().map(|p| to_poly(p)).collect();
-        let sea_polys: Vec<Vec<Vec2>> = SEAS.iter().map(|p| to_poly(p)).collect();
+        // land = a province whose centre (and mostly its surroundings) is on real land
+        let world = geo::build();
         let o = cw * 0.3;
         let offs = [vec2(0.0, 0.0), vec2(-o, -o), vec2(o, -o), vec2(-o, o), vec2(o, o)];
-        // cheap bounding boxes so most polygon tests can be skipped
-        let bbox = |pl: &Vec<Vec2>| -> (Vec2, Vec2) {
-            let mut lo = vec2(f32::MAX, f32::MAX);
-            let mut hi = vec2(f32::MIN, f32::MIN);
-            for v in pl {
-                lo = lo.min(*v);
-                hi = hi.max(*v);
-            }
-            (lo, hi)
-        };
-        let land_bb: Vec<(Vec2, Vec2)> = land_polys.iter().map(|p| bbox(p)).collect();
-        let sea_bb: Vec<(Vec2, Vec2)> = sea_polys.iter().map(|p| bbox(p)).collect();
-        let hit = |pl: &Vec<Vec2>, bb: &(Vec2, Vec2), q: Vec2| -> bool {
-            q.x >= bb.0.x && q.x <= bb.1.x && q.y >= bb.0.y && q.y <= bb.1.y && inside(pl, q)
-        };
-        let mut region = vec![255u8; provs.len()];
+        let mut region = vec![0u16; provs.len()];
         for (idx, p) in provs.iter_mut().enumerate() {
-            let mut cnt = 0;
-            let mut hits = vec![0u8; land_polys.len()];
-            for o in offs {
-                let q = p.pos + o;
-                if (0..sea_polys.len()).any(|k| hit(&sea_polys[k], &sea_bb[k], q)) {
-                    continue;
-                }
-                if let Some(k) = (0..land_polys.len()).position(|k| hit(&land_polys[k], &land_bb[k], q)) {
-                    hits[k] += 1;
-                    cnt += 1;
+            let mut regs: Vec<u16> = Vec::new();
+            for off in offs {
+                let (is_land, r) = world.at(p.pos + off);
+                if is_land {
+                    regs.push(r);
                 }
             }
-            if cnt >= 2 {
+            if regs.len() >= 2 {
                 p.sea = false;
-                let mut best = 0;
-                for k in 0..hits.len() {
-                    if hits[k] > hits[best] {
-                        best = k;
-                    }
-                }
-                region[idx] = best as u8;
+                // the landmass most of its samples belong to
+                region[idx] = *regs.iter().max_by_key(|&&r| regs.iter().filter(|&&q| q == r).count()).unwrap();
             }
         }
         // pixel -> province lookup (seeds are a jittered grid, so only nearby cells matter)
@@ -207,6 +164,14 @@ impl Game {
         }
         build_adj(&mut provs, &tile);
         cut_regions(&mut provs, &region);
+        for &((lo1, la1), (lo2, la2)) in LINKS {
+            let a = nearest_land(&provs, proj(lo1, la1), &[]);
+            let b = nearest_land(&provs, proj(lo2, la2), &[]);
+            if a != usize::MAX && b != usize::MAX && a != b && !provs[a].adj.contains(&b) {
+                provs[a].adj.push(b);
+                provs[b].adj.push(a);
+            }
+        }
         let (comp, nc) = components(&provs);
 
         // sea lanes: connect continents (minimum spanning tree + close neighbours)
@@ -238,7 +203,7 @@ impl Game {
             let (ca, cb) = (comp[a], comp[b]);
             let (ga, gb) = (group[ca], group[cb]);
             let tree_edge = ga != gb;
-            let extra = d < 0.04 * MW as f32 && deg[ca] < 3 && deg[cb] < 3;
+            let extra = d < 0.02 * MW as f32 && deg[ca] < 3 && deg[cb] < 3;
             if tree_edge || extra {
                 if tree_edge {
                     for g in group.iter_mut() {

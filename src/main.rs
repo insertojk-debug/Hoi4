@@ -1,10 +1,10 @@
 use macroquad::prelude::*;
 
 mod ai;
-mod coast;
 mod econ;
 mod game;
 mod gen;
+mod geo;
 mod royale;
 mod units;
 mod world;
@@ -110,6 +110,10 @@ fn conf() -> Conf {
 
 #[macroquad::main(conf)]
 async fn main() {
+    // show a message first: building the world takes a moment
+    clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
+    ctext("Generating the world...", screen_width() / 2.0, screen_height() / 2.0, (screen_height() / 14.0).clamp(18.0, 60.0), WHITE);
+    next_frame().await;
     let mut g = Game::new();
     royale::init(&mut g);
     let mut screen = 0u8; // 0 = title, 1 = playing
@@ -254,7 +258,7 @@ async fn main() {
                                 g.sel_army = first;
                             } else if let Some(sp) = royale::tap(&mut g, p) {
                                 cam = g.provs[sp].pos; // jump to your capital
-                                zoom = 9.0;
+                                zoom = 12.0;
                             }
                         }
                     }
