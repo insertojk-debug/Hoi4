@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 
 mod ai;
+mod diplo;
 mod econ;
 mod game;
 mod gen;

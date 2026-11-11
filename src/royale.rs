@@ -37,6 +37,8 @@ pub struct Royale {
     pub r0: f32,
     pub zone_r: f32,
     pub land_list: Vec<u32>,
+    pub war_with: Vec<Vec<u16>>,  // per player: who they are at war with
+    pub ally_with: Vec<Vec<u16>>, // per player: who they are allied with
 }
 
 impl Royale {
@@ -58,6 +60,8 @@ impl Royale {
             r0: 1.0,
             zone_r: 1.0,
             land_list: vec![],
+            war_with: vec![],
+            ally_with: vec![],
         }
     }
 }
@@ -144,6 +148,8 @@ pub fn init(g: &mut Game) {
     r.center = g.provs[c].pos;
     r.r0 = land.iter().map(|&p| g.provs[p].pos.distance(r.center)).fold(1.0, f32::max);
     r.zone_r = r.r0;
+    r.war_with = vec![vec![]; PLAYERS];
+    r.ally_with = vec![vec![]; PLAYERS];
     r.slot = vec![0; g.provs.len()];
     r.owned = vec![vec![]; PLAYERS];
     for i in 0..PLAYERS {
@@ -211,8 +217,12 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
         g.menu = Some(p); // your own land: build or train here
         return None;
     }
-    if g.provs[p].sea {
-        return None; // open water: nothing to show
+    if g.provs[p].sea || g.provs[p].owner == DEAD {
+        return None; // open water or lost land: nothing to show
+    }
+    if g.provs[p].owner < PLAYERS {
+        g.menu = Some(p); // another player's land: diplomacy
+        return None;
     }
     {
         // anything else: steer where your territory grows and show what is there
@@ -231,6 +241,7 @@ pub fn eliminate(g: &mut Game, d: usize) {
     g.roy.players[d].alive = false;
     g.roy.alive -= 1;
     g.armies.retain(|a| a.owner != d);
+    crate::diplo::clear(g, d);
     if d == 0 {
         g.roy.place = g.roy.alive + 1;
         g.roy.over = Some(false);
@@ -346,6 +357,7 @@ pub fn step(g: &mut Game) {
         }
     }
     crate::ai::step(g);
+    crate::diplo::ai_step(g);
     crate::units::step(g);
     storm(g);
     if g.roy.tick % 5 == 0 {
@@ -376,6 +388,11 @@ pub fn draw(g: &Game, fs: f32, top: f32, sw: f32, sh: f32) {
         )
     };
     draw_text(&txt, fs * 0.6, top * 0.68, fs, WHITE);
+    if r.started {
+        let badge = format!("At war with {}   Allied with {}", r.war_with[0].len(), r.ally_with[0].len());
+        draw_rectangle(0.0, top, fs * 14.0, fs * 1.1, Color::new(0.05, 0.06, 0.1, 0.7));
+        draw_text(&badge, fs * 0.4, top + fs * 0.8, fs * 0.8, Color::new(0.9, 0.85, 0.6, 1.0));
+    }
     if r.started {
         let (w, rh) = (fs * 7.5, fs * 1.2);
         let x = sw - w - 8.0;

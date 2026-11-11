@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use std::collections::HashMap;
 
+use crate::diplo::hostile;
 use crate::game::*;
 use crate::royale::{claim, eliminate, release};
 use crate::world::*;
@@ -29,13 +30,14 @@ pub fn step(g: &mut Game) {
             None => continue,
         };
         let here = g.provs[pv].owner;
-        let fighting = occ.get(&pv).map_or(false, |v| v.iter().any(|&j| g.armies[j].owner != o));
-        // a soldier stuck in a fight may retreat to its own land or free land, but cannot push on
-        let advancing = g.provs[nx].owner != o && g.provs[nx].owner != NEUTRAL;
-        if advancing && ((here != o && here != NEUTRAL) || fighting) {
+        let fighting = occ.get(&pv).map_or(false, |v| v.iter().any(|&j| hostile(g, o, g.armies[j].owner)));
+        // a soldier stuck in a fight may retreat to safe land, but cannot push deeper into enemy land
+        let advancing = hostile(g, o, g.provs[nx].owner);
+        let in_enemy_land = hostile(g, o, here);
+        if advancing && (in_enemy_land || fighting) {
             continue; // still fighting for this province
         }
-        let retreating = !advancing && here != o && here != NEUTRAL;
+        let retreating = !advancing && in_enemy_land;
         let base = if g.provs[pv].sea_adj.contains(&nx) { 0.06 } else { 0.15 };
         g.armies[i].prog += if retreating { 1.0 } else { base * SPD[g.armies[i].kind] };
         if g.armies[i].prog >= 0.999 {
@@ -62,7 +64,7 @@ pub fn step(g: &mut Game) {
         }
         for &i in v {
             for &j in v {
-                if g.armies[i].owner != g.armies[j].owner {
+                if hostile(g, g.armies[i].owner, g.armies[j].owner) {
                     let mut d = g.armies[i].size * 0.15 * ATK[g.armies[i].kind] * rand::gen_range(0.7f32, 1.3f32);
                     d /= DEF[g.armies[j].kind];
                     if g.armies[j].owner == g.provs[*p].owner {
@@ -83,7 +85,7 @@ pub fn step(g: &mut Game) {
         for &l in &g.provs[s].ladj {
             if let Some(v) = occ.get(&l) {
                 for &j in v {
-                    if !is_naval(g.armies[j].kind) && g.armies[j].owner != o {
+                    if !is_naval(g.armies[j].kind) && hostile(g, o, g.armies[j].owner) {
                         dmg[j] += g.armies[i].size * 0.03 * ATK[k] * rand::gen_range(0.7f32, 1.3f32) / DEF[g.armies[j].kind];
                     }
                 }
@@ -100,10 +102,10 @@ pub fn step(g: &mut Game) {
     for i in 0..g.armies.len() {
         let (p, o) = (g.armies[i].prov, g.armies[i].owner);
         let d = g.provs[p].owner;
-        if d == o || d == NEUTRAL || d == DEAD || g.provs[p].sea {
-            continue;
+        if d == o || d == NEUTRAL || d == DEAD || g.provs[p].sea || !hostile(g, o, d) {
+            continue; // only land of a player you are at war with can be taken
         }
-        if occ[&p].iter().any(|&j| g.armies[j].owner != o) {
+        if occ[&p].iter().any(|&j| hostile(g, o, g.armies[j].owner)) {
             continue; // enemy soldiers are still here: keep fighting
         }
         release(g, p, d);

@@ -1,10 +1,10 @@
 use macroquad::prelude::*;
 
+use crate::diplo::{appetite, hostile};
 use crate::game::*;
 use crate::units::occupancy;
 use crate::world::*;
 
-const PEACE: u32 = 1500; // bots do not attack before this tick
 
 // bots: build factories, train soldiers, and send them into neighbouring land
 pub fn step(g: &mut Game) {
@@ -38,7 +38,9 @@ pub fn step(g: &mut Game) {
             }
         }
         // then soldiers, at a random finished military factory
-        if count[i] < 3 + land / 3 && rand::gen_range(0.0f32, 1.0) < aggr && g.roy.players[i].stars >= STAR_COST[kind] {
+        let at_war = !g.roy.war_with[i].is_empty();
+        let wants_army = at_war || rand::gen_range(0.0f32, 1.0) < appetite(g) * 0.3;
+        if wants_army && count[i] < 3 + land / 3 && rand::gen_range(0.0f32, 1.0) < aggr && g.roy.players[i].stars >= STAR_COST[kind] {
             for _ in 0..10 {
                 let p = g.roy.owned[i][rand::gen_range(0, m)] as usize;
                 if g.bld[p] == 2 && g.recruit(i, p, kind).is_ok() {
@@ -51,7 +53,7 @@ pub fn step(g: &mut Game) {
     // orders: idle soldiers look at the provinces next to them
     let occ = occupancy(g);
     let strength = |g: &Game, p: usize, owner: usize| -> f32 {
-        occ.get(&p).map_or(0.0, |v| v.iter().filter(|&&j| g.armies[j].owner != owner).map(|&j| g.armies[j].size * ATK[g.armies[j].kind]).sum())
+        occ.get(&p).map_or(0.0, |v| v.iter().filter(|&&j| hostile(g, owner, g.armies[j].owner)).map(|&j| g.armies[j].size * ATK[g.armies[j].kind]).sum())
     };
     for ai in 0..g.armies.len() {
         let (o, pv, id) = (g.armies[ai].owner, g.armies[ai].prov, g.armies[ai].id);
@@ -66,7 +68,7 @@ pub fn step(g: &mut Game) {
             let d = g.provs[q].owner;
             if d == NEUTRAL {
                 free = Some(q);
-            } else if d != o && d != DEAD && tick >= PEACE {
+            } else if d != o && hostile(g, o, d) {
                 let s = strength(g, q, o);
                 if s == 0.0 {
                     open = Some(q);

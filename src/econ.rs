@@ -1,4 +1,6 @@
+use crate::diplo::{allied, at_war, break_alliance, declare_war, make_peace, propose_alliance, propose_peace};
 use crate::game::*;
+use crate::royale::PLAYERS;
 use crate::world::*;
 
 pub struct Item {
@@ -12,7 +14,7 @@ pub struct Item {
 pub struct MenuInfo {
     pub header: String,
     pub items: Vec<Item>,
-    pub action: u8, // what the buttons do: 0 build, 1 train soldiers, 2 train ships
+    pub action: u8, // what the buttons do: 0 build, 1 train soldiers, 2 train ships, 3 diplomacy
 }
 
 fn secs(ticks: u32, speed: f32) -> String {
@@ -92,6 +94,22 @@ impl Game {
         let stars = self.roy.players[0].stars;
         let cap = if self.roy.players[0].capital == p { "CAPITAL - " } else { "" };
         let mk = |header: String| MenuInfo { header, items: vec![], action: 0 };
+        let other = self.provs[p].owner;
+        if other < PLAYERS && other != 0 {
+            // another player's land: diplomacy
+            let (war, ally) = (at_war(self, 0, other), allied(self, 0, other));
+            let status = if war { "AT WAR" } else if ally { "ALLIED" } else { "at peace" };
+            let it = |t: &str, l2: &str, ok: bool| Item { title: t.to_string(), line2: l2.to_string(), line3: String::new(), ok };
+            return MenuInfo {
+                header: format!("Bot {} ({} tiles) - {}", other, self.roy.players[other].land, status),
+                items: vec![
+                    it("Declare War", if ally { "betray the ally" } else { "take their land" }, !war),
+                    it(if ally { "Break Alliance" } else { "Propose Alliance" }, if ally { "back to peace" } else { "no fighting" }, !war),
+                    it("Propose Peace", "end the war", war),
+                ],
+                action: 3,
+            };
+        }
         if !self.has_capital(0) {
             return mk("Capital lost - you can't build or train".to_string());
         }
@@ -162,6 +180,43 @@ impl Game {
             0 => {
                 self.start_build(0, p, idx)?;
                 Ok(format!("{} started", BUILD_NAMES[idx]))
+            }
+            3 => {
+                let d = self.provs[p].owner;
+                match idx {
+                    0 => {
+                        if at_war(self, 0, d) {
+                            return Err("Already at war");
+                        }
+                        declare_war(self, 0, d);
+                        Ok(format!("You declared war on Bot {}", d))
+                    }
+                    1 => {
+                        if allied(self, 0, d) {
+                            break_alliance(self, 0, d);
+                            return Ok(format!("Alliance with Bot {} ended", d));
+                        }
+                        if at_war(self, 0, d) {
+                            return Err("Make peace first");
+                        }
+                        if propose_alliance(self, 0, d) {
+                            Ok(format!("Bot {} accepted your alliance", d))
+                        } else {
+                            Ok(format!("Bot {} refused the alliance", d))
+                        }
+                    }
+                    _ => {
+                        if !at_war(self, 0, d) {
+                            return Err("You are not at war");
+                        }
+                        if propose_peace(self, 0, d) {
+                            Ok(format!("Bot {} accepted peace", d))
+                        } else {
+                            let _ = make_peace;
+                            Ok(format!("Bot {} refused peace", d))
+                        }
+                    }
+                }
             }
             a => {
                 let kind = if a == 2 { idx + 3 } else { idx };

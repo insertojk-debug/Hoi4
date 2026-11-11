@@ -1,6 +1,7 @@
 use macroquad::prelude::*;
 use std::collections::VecDeque;
 
+use crate::diplo::hostile;
 use crate::royale::Royale;
 use crate::world::*;
 
@@ -211,9 +212,12 @@ impl Game {
         let route = if ship { self.bfs_sea(f, |q| q == p) } else { self.bfs(f, |q| q == p) };
         match route {
             Some(path) => {
-                let foe: f32 = self.armies.iter().filter(|a| a.prov == p && a.owner != 0).map(|a| a.size * ATK[a.kind]).sum();
+                let foe: f32 = self.armies.iter().filter(|a| a.prov == p && hostile(self, 0, a.owner)).map(|a| a.size * ATK[a.kind]).sum();
+                let owner = self.provs[p].owner;
                 if foe > 0.0 {
                     self.say(&format!("Attacking enemy soldiers: strength {:.0} vs your {:.0}", foe, power));
+                } else if owner != 0 && owner < crate::royale::PLAYERS && !hostile(self, 0, owner) {
+                    self.say(&format!("You are not at war with Bot {} - declare war to take their land", owner));
                 }
                 if let Some(a) = self.armies.iter_mut().find(|a| a.id == id) {
                     a.path = path;
