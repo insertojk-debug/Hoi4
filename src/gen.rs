@@ -7,6 +7,8 @@ use crate::world::*;
 fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
     for p in provs.iter_mut() {
         p.adj.clear();
+        p.nadj.clear();
+        p.ladj.clear();
         p.coast = false;
     }
     for y in 0..MH {
@@ -22,6 +24,15 @@ fn build_adj(provs: &mut Vec<Prov>, tile: &[u16]) {
                     if a != b && provs[a].sea != provs[b].sea {
                         provs[a].coast = true;
                         provs[b].coast = true;
+                        let (land, sea) = if provs[a].sea { (b, a) } else { (a, b) };
+                        if !provs[land].nadj.contains(&sea) {
+                            provs[land].nadj.push(sea);
+                            provs[sea].ladj.push(land);
+                        }
+                    }
+                    if a != b && provs[a].sea && provs[b].sea && !provs[a].nadj.contains(&b) {
+                        provs[a].nadj.push(b);
+                        provs[b].nadj.push(a);
                     }
                 }
             }
@@ -94,7 +105,7 @@ impl Game {
             for c in 0..cols {
                 let x = (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * cw;
                 let y = (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * ch;
-                provs.push(Prov { pos: vec2(x, y), owner: NEUTRAL, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], sea_adj: vec![] });
+                provs.push(Prov { pos: vec2(x, y), owner: NEUTRAL, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], nadj: vec![], ladj: vec![], sea_adj: vec![] });
             }
         }
         // land = a province whose centre (and mostly its surroundings) is on real land

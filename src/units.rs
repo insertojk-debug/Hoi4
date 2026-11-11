@@ -73,6 +73,23 @@ pub fn step(g: &mut Game) {
             }
         }
     }
+    // ships shell enemy soldiers standing on the coast next to them
+    for i in 0..g.armies.len() {
+        let k = g.armies[i].kind;
+        if !is_naval(k) {
+            continue;
+        }
+        let (s, o) = (g.armies[i].prov, g.armies[i].owner);
+        for &l in &g.provs[s].ladj {
+            if let Some(v) = occ.get(&l) {
+                for &j in v {
+                    if !is_naval(g.armies[j].kind) && g.armies[j].owner != o {
+                        dmg[j] += g.armies[i].size * 0.03 * ATK[k] * rand::gen_range(0.7f32, 1.3f32) / DEF[g.armies[j].kind];
+                    }
+                }
+            }
+        }
+    }
     for i in 0..g.armies.len() {
         g.armies[i].size -= dmg[i];
     }

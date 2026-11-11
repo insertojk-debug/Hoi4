@@ -16,18 +16,23 @@ pub const DEAD: usize = usize::MAX - 1; // land swallowed by the storm
 pub const START_STARS: f32 = 25.0;
 pub const INCOME: f32 = 2.0; // stars one civilian factory pays each cycle
 pub const CYCLE: u32 = 10; // ticks per income cycle
-pub const BUILD_NAMES: [&str; 2] = ["Civilian Factory", "Military Factory"];
-pub const BUILD_COST: [f32; 2] = [10.0, 15.0]; // stars
-pub const BUILD_TIME: [u32; 2] = [30, 60]; // ticks to finish
-pub const MAX_STACK: usize = 3; // soldiers of one player per tile
+pub const BUILD_NAMES: [&str; 3] = ["Civilian Factory", "Military Factory", "Dockyard"];
+pub const BUILD_COST: [f32; 3] = [10.0, 15.0, 20.0]; // stars
+pub const BUILD_TIME: [u32; 3] = [30, 60, 80]; // ticks to finish
+pub const MAX_STACK: usize = 3; // units of one player per tile
 
-// ---- soldiers: 0 = Infantry, 1 = Artillery, 2 = Tank ----
-pub const KIND_NAMES: [&str; 3] = ["Infantry", "Artillery", "Tank"];
-pub const KIND_LETTER: [&str; 3] = ["I", "A", "T"];
-pub const STAR_COST: [f32; 3] = [5.0, 8.0, 12.0];
-pub const ATK: [f32; 3] = [1.0, 1.6, 1.4];
-pub const DEF: [f32; 3] = [1.0, 0.6, 1.3];
-pub const SPD: [f32; 3] = [1.0, 0.8, 1.6];
+// ---- units: 0 Infantry, 1 Artillery, 2 Tank (land), 3 Destroyer, 4 Aircraft Carrier, 5 Submarine (sea) ----
+pub const KIND_NAMES: [&str; 6] = ["Infantry", "Artillery", "Tank", "Destroyer", "Aircraft Carrier", "Submarine"];
+pub const KIND_LETTER: [&str; 6] = ["I", "A", "T", "D", "C", "S"];
+pub const STAR_COST: [f32; 6] = [5.0, 8.0, 12.0, 10.0, 18.0, 12.0];
+pub const HP: [f32; 6] = [10.0, 10.0, 10.0, 14.0, 22.0, 12.0];
+pub const ATK: [f32; 6] = [1.0, 1.6, 1.4, 1.2, 1.0, 1.8];
+pub const DEF: [f32; 6] = [1.0, 0.6, 1.3, 1.1, 1.6, 0.6];
+pub const SPD: [f32; 6] = [1.0, 0.8, 1.6, 1.4, 0.7, 1.0];
+
+pub fn is_naval(kind: usize) -> bool {
+    kind >= 3
+}
 
 // sea crossings between provinces that are cut apart on the map (lon,lat) <-> (lon,lat)
 pub const FERRIES: &[((f32, f32), (f32, f32))] = &[

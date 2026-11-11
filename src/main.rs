@@ -358,6 +358,7 @@ async fn main() {
                 let done = g.bld_done[p] <= g.roy.tick;
                 let (col, label) = match (g.bld[p], done) {
                     (1, true) => (Color::new(0.95, 0.8, 0.2, 1.0), "$"),
+                    (3, true) => (Color::new(0.35, 0.6, 0.95, 1.0), "D"),
                     (_, true) => (Color::new(0.85, 0.3, 0.3, 1.0), "M"),
                     _ => (Color::new(0.5, 0.5, 0.55, 1.0), ".."),
                 };

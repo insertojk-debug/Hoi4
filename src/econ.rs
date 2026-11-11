@@ -12,7 +12,7 @@ pub struct Item {
 pub struct MenuInfo {
     pub header: String,
     pub items: Vec<Item>,
-    pub train: bool, // true: the buttons train soldiers, false: they build factories
+    pub action: u8, // what the buttons do: 0 build, 1 train soldiers, 2 train ships
 }
 
 fn secs(ticks: u32, speed: f32) -> String {
@@ -40,6 +40,9 @@ impl Game {
         if self.bld[p] != 0 {
             return Err("Something is already built here");
         }
+        if kind == 2 && !self.provs[p].coast {
+            return Err("A dockyard needs a coastline tile");
+        }
         if self.roy.players[owner].stars < BUILD_COST[kind] {
             return Err("Not enough stars");
         }
@@ -48,27 +51,39 @@ impl Game {
         self.bld_done[p] = self.roy.tick + BUILD_TIME[kind];
         match kind {
             0 => self.roy.players[owner].civ += 1,
-            _ => self.roy.players[owner].mil += 1,
+            1 => self.roy.players[owner].mil += 1,
+            _ => {}
         }
         Ok(())
     }
 
-    // train a soldier in a finished military factory
+    // train a soldier in a finished military factory, or a ship in a finished dockyard
     pub fn recruit(&mut self, owner: usize, p: usize, kind: usize) -> Result<(), &'static str> {
         if !self.has_capital(owner) {
             return Err("Capital lost - you can't train");
         }
-        if self.provs[p].owner != owner || self.bld[p] != 2 || self.bld_done[p] > self.roy.tick {
-            return Err("Needs a finished military factory");
+        let ship = is_naval(kind);
+        let need = if ship { 3 } else { 2 };
+        if self.provs[p].owner != owner || self.bld[p] != need || self.bld_done[p] > self.roy.tick {
+            return Err(if ship { "Needs a finished dockyard" } else { "Needs a finished military factory" });
         }
-        if self.soldiers_at(p, owner) >= MAX_STACK {
-            return Err("Tile is full (3 soldiers)");
-        }
+        // soldiers appear on the factory tile, ships in a free water tile next to the dockyard
+        let at = if ship {
+            match self.provs[p].nadj.iter().copied().find(|&s| self.soldiers_at(s, owner) < MAX_STACK) {
+                Some(s) => s,
+                None => return Err("No free water next to the dockyard"),
+            }
+        } else {
+            if self.soldiers_at(p, owner) >= MAX_STACK {
+                return Err("Tile is full (3 soldiers)");
+            }
+            p
+        };
         if self.roy.players[owner].stars < STAR_COST[kind] {
             return Err("Not enough stars");
         }
         self.roy.players[owner].stars -= STAR_COST[kind];
-        self.spawn(owner, p, 10.0, kind);
+        self.spawn(owner, at, HP[kind], kind);
         Ok(())
     }
 
@@ -76,22 +91,27 @@ impl Game {
         let speed = SPEEDS[self.speed_i];
         let stars = self.roy.players[0].stars;
         let cap = if self.roy.players[0].capital == p { "CAPITAL - " } else { "" };
-        let mk = |header: String| MenuInfo { header, items: vec![], train: false };
+        let mk = |header: String| MenuInfo { header, items: vec![], action: 0 };
         if !self.has_capital(0) {
             return mk("Capital lost - you can't build or train".to_string());
         }
         match self.bld[p] {
             0 => MenuInfo {
                 header: format!("{}Build here ({:.0} stars)", cap, stars),
-                items: (0..2)
+                // a dockyard can only be built on the coastline
+                items: (0..if self.provs[p].coast { 3 } else { 2 })
                     .map(|k| Item {
                         title: BUILD_NAMES[k].to_string(),
                         line2: format!("{} stars", BUILD_COST[k] as i32),
-                        line3: if k == 0 { format!("+{} stars / {}", INCOME as i32, secs(CYCLE, speed)) } else { "trains soldiers".to_string() },
+                        line3: match k {
+                            0 => format!("+{} stars / {}", INCOME as i32, secs(CYCLE, speed)),
+                            1 => "trains soldiers".to_string(),
+                            _ => "trains ships".to_string(),
+                        },
                         ok: stars >= BUILD_COST[k],
                     })
                     .collect(),
-                train: false,
+                action: 0,
             },
             b => {
                 let name = BUILD_NAMES[b as usize - 1];
@@ -100,6 +120,23 @@ impl Game {
                 }
                 if b == 1 {
                     return mk(format!("{}{}: +{} stars every {}", cap, name, INCOME as i32, secs(CYCLE, speed)));
+                }
+                if b == 3 {
+                    if !self.provs[p].nadj.iter().any(|&s| self.soldiers_at(s, 0) < MAX_STACK) {
+                        return mk(format!("{}{}: no free water next to it", cap, name));
+                    }
+                    return MenuInfo {
+                        header: format!("{}{} - build ships ({:.0} stars)", cap, name, stars),
+                        items: (3..6)
+                            .map(|k| Item {
+                                title: KIND_NAMES[k].to_string(),
+                                line2: format!("{} stars", STAR_COST[k] as i32),
+                                line3: ["balanced", "tough, slow", "strong attack"][k - 3].to_string(),
+                                ok: stars >= STAR_COST[k],
+                            })
+                            .collect(),
+                        action: 2,
+                    };
                 }
                 if self.soldiers_at(p, 0) >= MAX_STACK {
                     return mk(format!("{}{}: tile is full (3 soldiers max)", cap, name));
@@ -114,19 +151,23 @@ impl Game {
                             ok: stars >= STAR_COST[k],
                         })
                         .collect(),
-                    train: true,
+                    action: 1,
                 }
             }
         }
     }
 
     pub fn menu_pick(&mut self, p: usize, idx: usize) -> Result<String, &'static str> {
-        if self.menu_content(p).train {
-            self.recruit(0, p, idx)?;
-            Ok(format!("{} trained", KIND_NAMES[idx]))
-        } else {
-            self.start_build(0, p, idx)?;
-            Ok(format!("{} started", BUILD_NAMES[idx]))
+        match self.menu_content(p).action {
+            0 => {
+                self.start_build(0, p, idx)?;
+                Ok(format!("{} started", BUILD_NAMES[idx]))
+            }
+            a => {
+                let kind = if a == 2 { idx + 3 } else { idx };
+                self.recruit(0, p, kind)?;
+                Ok(format!("{} trained", KIND_NAMES[kind]))
+            }
         }
     }
 }

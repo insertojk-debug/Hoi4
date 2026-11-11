@@ -11,6 +11,8 @@ pub struct Prov {
     pub coast: bool,
     pub bb: (usize, usize, usize, usize), // bounding box in tiles
     pub adj: Vec<usize>,                  // land borders
+    pub nadj: Vec<usize>,                 // neighbouring water provinces (for ships and for coastal land)
+    pub ladj: Vec<usize>,                 // for water provinces: neighbouring land provinces
     pub sea_adj: Vec<usize>,              // sea lanes to other continents (slow)
 }
 
@@ -141,6 +143,35 @@ impl Game {
         None
     }
 
+    // route over water for ships
+    pub fn bfs_sea(&self, from: usize, goal: impl Fn(usize) -> bool) -> Option<VecDeque<usize>> {
+        let n = self.provs.len();
+        let mut prev = vec![usize::MAX; n];
+        let mut seen = vec![false; n];
+        let mut q = VecDeque::new();
+        q.push_back(from);
+        seen[from] = true;
+        while let Some(u) = q.pop_front() {
+            if u != from && goal(u) {
+                let mut path = VecDeque::new();
+                let mut c = u;
+                while c != from {
+                    path.push_front(c);
+                    c = prev[c];
+                }
+                return Some(path);
+            }
+            for &v in &self.provs[u].nadj {
+                if !seen[v] && self.provs[v].sea {
+                    seen[v] = true;
+                    prev[v] = u;
+                    q.push_back(v);
+                }
+            }
+        }
+        None
+    }
+
     pub fn say(&mut self, s: &str) {
         self.toast = s.to_string();
         self.toast_t = 2.0;
@@ -152,12 +183,12 @@ impl Game {
             Some(id) => id,
             None => return false,
         };
-        if self.provs[p].sea || self.provs[p].owner == DEAD {
+        if self.provs[p].owner == DEAD {
             self.say("Can't go there");
             return true;
         }
-        let from = self.armies.iter().find(|a| a.id == id).map(|a| (a.prov, a.size * ATK[a.kind]));
-        let (f, power) = match from {
+        let from = self.armies.iter().find(|a| a.id == id).map(|a| (a.prov, a.size * ATK[a.kind], a.kind));
+        let (f, power, kind) = match from {
             Some(x) => x,
             None => {
                 self.sel_army = None;
@@ -168,7 +199,17 @@ impl Game {
             self.sel_army = None; // tapped its own tile: let go of it
             return true;
         }
-        match self.bfs(f, |q| q == p) {
+        let ship = is_naval(kind);
+        if ship && !self.provs[p].sea {
+            self.say("Ships can only sail on water");
+            return true;
+        }
+        if !ship && self.provs[p].sea {
+            self.say("Soldiers can't walk on water");
+            return true;
+        }
+        let route = if ship { self.bfs_sea(f, |q| q == p) } else { self.bfs(f, |q| q == p) };
+        match route {
             Some(path) => {
                 let foe: f32 = self.armies.iter().filter(|a| a.prov == p && a.owner != 0).map(|a| a.size * ATK[a.kind]).sum();
                 if foe > 0.0 {

@@ -211,6 +211,9 @@ pub fn tap(g: &mut Game, p: usize) -> Option<usize> {
         g.menu = Some(p); // your own land: build or train here
         return None;
     }
+    if g.provs[p].sea {
+        return None; // open water: nothing to show
+    }
     {
         // anything else: steer where your territory grows and show what is there
         g.roy.focus = if g.roy.focus == Some(p) { None } else { Some(p) };
@@ -361,7 +364,7 @@ pub fn draw(g: &Game, fs: f32, top: f32, sw: f32, sh: f32) {
     } else {
         let me = &r.players[0];
         format!(
-            "Alive {}/{}   Land {} ({:.1}%)   Stars {:.0}   Soldiers {}   Rank {}   Zone {:.0}%",
+            "Alive {}/{}   Land {} ({:.1}%)   Stars {:.0}   Units {}   Rank {}   Zone {:.0}%",
             r.alive,
             PLAYERS,
             me.land,
