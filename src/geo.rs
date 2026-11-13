@@ -4,13 +4,14 @@ use crate::world::*;
 
 // real coastlines (Natural Earth, simplified), packed by a script into world.bin
 const DATA: &[u8] = include_bytes!("world.bin");
-const MS: usize = 3; // one mask cell covers 3x3 map tiles
+const MS: usize = 2; // one mask cell covers 2x2 map tiles
 
 pub struct Geo {
     w: usize,
     h: usize,
     land: Vec<u8>,
     reg: Vec<u16>, // which landmass (polygon) a cell belongs to
+    groups: Vec<u8>, // per landmass: 0 normal, 1 Philippines islands, 2 Japanese islands
 }
 
 struct Rd<'a> {
@@ -19,6 +20,11 @@ struct Rd<'a> {
 }
 
 impl<'a> Rd<'a> {
+    fn u8(&mut self) -> u8 {
+        let v = self.d[self.p];
+        self.p += 1;
+        v
+    }
     fn u32(&mut self) -> u32 {
         let v = u32::from_le_bytes([self.d[self.p], self.d[self.p + 1], self.d[self.p + 2], self.d[self.p + 3]]);
         self.p += 4;
@@ -88,7 +94,9 @@ pub fn build() -> Geo {
     let mut rd = Rd { d: DATA, p: 0 };
     let np = rd.u32() as usize;
     let mut polys: Vec<Vec<Vec<Vec2>>> = Vec::new();
+    let mut groups: Vec<u8> = Vec::new();
     for _ in 0..np {
+        groups.push(rd.u8());
         let nr = rd.u32();
         polys.push((0..nr).map(|_| rd.ring()).collect());
     }
@@ -123,10 +131,19 @@ pub fn build() -> Geo {
             }
         });
     }
-    Geo { w, h, land, reg }
+    Geo { w, h, land, reg, groups }
 }
 
 impl Geo {
+    // archipelago group of a landmass id from at()
+    pub fn group(&self, reg: u16) -> u8 {
+        if reg == 0 {
+            0
+        } else {
+            self.groups[reg as usize - 1]
+        }
+    }
+
     // is this map position land, and which landmass is it
     pub fn at(&self, p: Vec2) -> (bool, u16) {
         let x = ((p.x / MS as f32) as i32).clamp(0, self.w as i32 - 1) as usize;

@@ -68,10 +68,7 @@ fn menu_layout(l: &Lay, sw: f32, sh: f32, anchor: Vec2, n: usize, header_w: f32)
 }
 
 // where each soldier's box is drawn: up to three side by side under the tile centre
-fn soldier_rects(g: &Game, to_screen: &dyn Fn(Vec2) -> Vec2, cell: f32, fs: f32, sw: f32, sh: f32, top: f32) -> Vec<(usize, Rect)> {
-    let marker = cell < fs * 0.7;
-    let bw = (cell * 0.6).clamp(fs * 0.9, fs * 2.2);
-    let bh = bw * 0.75;
+fn soldier_rects(g: &Game, to_screen: &dyn Fn(Vec2) -> Vec2, scale: f32, fs: f32, sw: f32, sh: f32, top: f32) -> Vec<(usize, Rect)> {
     let mut n_at = vec![0u8; g.provs.len()];
     for a in &g.armies {
         n_at[a.prov] = n_at[a.prov].saturating_add(1);
@@ -84,6 +81,10 @@ fn soldier_rects(g: &Game, to_screen: &dyn Fn(Vec2) -> Vec2, cell: f32, fs: f32,
         if k >= 6 {
             continue;
         }
+        let cell = g.provs[a.prov].sp * scale; // this province's size on screen
+        let marker = cell < fs * 0.7;
+        let bw = (cell * 0.6).clamp(fs * 0.9, fs * 2.2);
+        let bh = bw * 0.75;
         let c = to_screen(g.provs[a.prov].pos);
         if c.x < -bw * 4.0 || c.x > sw + bw * 4.0 || c.y < top - bh || c.y > sh + bh {
             continue; // off screen
@@ -162,7 +163,6 @@ async fn main() {
         }
 
         let scale = l.base * zoom;
-        let cell = CELL * scale;
         let to_screen = move |p: Vec2| vec2(sw / 2.0 + (p.x - cam.x) * scale, mid_y + (p.y - cam.y) * scale);
 
         // ---- input ----
@@ -239,7 +239,7 @@ async fn main() {
                 if is_mouse_button_released(MouseButton::Left) {
                     if !moved && g.roy.started && g.roy.over.is_none() {
                         // a tap on one of your soldiers selects that soldier
-                        let rects = soldier_rects(&g, &to_screen, cell, l.fs, sw, sh, l.top);
+                        let rects = soldier_rects(&g, &to_screen, scale, l.fs, sw, sh, l.top);
                         let mouse = vec2(mx, my);
                         let hit = rects.iter().rev().find(|(i, r)| g.armies[*i].owner == 0 && r.contains(mouse)).map(|(i, _)| g.armies[*i].id);
                         if let Some(id) = hit {
@@ -255,7 +255,7 @@ async fn main() {
                             let p = g.tile[ty as usize * MW + tx as usize] as usize;
                             // zoomed far out the soldier boxes are tiny: a tap on the tile picks its first soldier
                             let first = g.armies.iter().find(|a| a.owner == 0 && a.prov == p).map(|a| a.id);
-                            if g.roy.started && cell < l.fs * 0.7 && g.sel_army.is_none() && first.is_some() {
+                            if g.roy.started && g.provs[p].sp * scale < l.fs * 0.7 && g.sel_army.is_none() && first.is_some() {
                                 g.sel_army = first;
                             } else if let Some(sp) = royale::tap(&mut g, p) {
                                 cam = g.provs[sp].pos; // jump to your capital
@@ -298,7 +298,6 @@ async fn main() {
         }
 
         // ---- draw ----
-        let cell = CELL * scale;
         let to_screen = move |p: Vec2| vec2(sw / 2.0 + (p.x - cam.x) * scale, mid_y + (p.y - cam.y) * scale);
         clear_background(Color::new(0.05, 0.05, 0.08, 1.0));
         draw_texture_ex(
@@ -342,32 +341,34 @@ async fn main() {
             let cp = g.roy.players[0].capital;
             let c = to_screen(g.provs[cp].pos);
             let col = if g.has_capital(0) { Color::new(1.0, 0.85, 0.2, 1.0) } else { RED };
-            draw_circle_lines(c.x, c.y, (l.fs * 0.7).max(cell * 0.6), 3.0, col);
+            draw_circle_lines(c.x, c.y, (l.fs * 0.7).max(g.provs[cp].sp * scale * 0.6), 3.0, col);
         }
         // factories
-        if cell >= l.fs * 0.7 {
-            let ic = (cell * 0.42).max(l.fs * 0.55);
-            for &pu in &g.roy.land_list {
-                let p = pu as usize;
-                if g.bld[p] == 0 {
-                    continue;
-                }
-                let c = to_screen(g.provs[p].pos);
-                if c.x < -ic || c.x > sw + ic || c.y < l.top - ic || c.y > sh {
-                    continue;
-                }
-                let done = g.bld_done[p] <= g.roy.tick;
-                let (col, label) = match (g.bld[p], done) {
-                    (1, true) => (Color::new(0.95, 0.8, 0.2, 1.0), "$"),
-                    (3, true) => (Color::new(0.35, 0.6, 0.95, 1.0), "D"),
-                    (_, true) => (Color::new(0.85, 0.3, 0.3, 1.0), "M"),
-                    _ => (Color::new(0.5, 0.5, 0.55, 1.0), ".."),
-                };
-                let r = Rect::new(c.x - ic / 2.0, c.y - cell * 0.22 - ic / 2.0, ic, ic);
-                draw_rectangle(r.x, r.y, r.w, r.h, col);
-                draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, BLACK);
-                ctext(label, c.x, c.y - cell * 0.22, ic * 0.8, BLACK);
+        for &pu in &g.roy.land_list {
+            let p = pu as usize;
+            if g.bld[p] == 0 {
+                continue;
             }
+            let cl = g.provs[p].sp * scale;
+            if cl < l.fs * 0.7 {
+                continue; // too small to draw at this zoom
+            }
+            let ic = (cl * 0.42).max(l.fs * 0.55);
+            let c = to_screen(g.provs[p].pos);
+            if c.x < -ic || c.x > sw + ic || c.y < l.top - ic || c.y > sh {
+                continue;
+            }
+            let done = g.bld_done[p] <= g.roy.tick;
+            let (col, label) = match (g.bld[p], done) {
+                (1, true) => (Color::new(0.95, 0.8, 0.2, 1.0), "$"),
+                (3, true) => (Color::new(0.35, 0.6, 0.95, 1.0), "D"),
+                (_, true) => (Color::new(0.85, 0.3, 0.3, 1.0), "M"),
+                _ => (Color::new(0.5, 0.5, 0.55, 1.0), ".."),
+            };
+            let r = Rect::new(c.x - ic / 2.0, c.y - cl * 0.22 - ic / 2.0, ic, ic);
+            draw_rectangle(r.x, r.y, r.w, r.h, col);
+            draw_rectangle_lines(r.x, r.y, r.w, r.h, 2.0, BLACK);
+            ctext(label, c.x, c.y - cl * 0.22, ic * 0.8, BLACK);
         }
         // path of the selected soldier
         if let Some(id) = g.sel_army {
@@ -381,12 +382,12 @@ async fn main() {
             }
         }
         // soldiers: up to three boxes side by side on a tile
-        let rects = soldier_rects(&g, &to_screen, cell, l.fs, sw, sh, l.top);
+        let rects = soldier_rects(&g, &to_screen, scale, l.fs, sw, sh, l.top);
         for (i, r) in &rects {
             let a = &g.armies[*i];
             let col = royale::owner_color(&g, a.owner);
             let selected = g.sel_army == Some(a.id);
-            if cell < l.fs * 0.7 {
+            if g.provs[a.prov].sp * scale < l.fs * 0.7 {
                 draw_rectangle(r.x, r.y, r.w, r.h, col);
                 draw_rectangle_lines(r.x, r.y, r.w, r.h, if selected { 3.0 } else { 1.0 }, if selected { RED } else { BLACK });
                 continue;

@@ -1,11 +1,22 @@
 use macroquad::prelude::*;
 
 // the map shows longitude -170..180 and latitude 84..-58 (equal scale in both directions)
-pub const MW: usize = 3204;
-pub const MH: usize = 1296;
-pub const COLS: usize = 356; // province grid (about 51,000 provinces)
-pub const ROWS: usize = 144;
-pub const CELL: f32 = 9.0; // width of one province in map tiles
+pub const MW: usize = 4080;
+pub const MH: usize = 1664;
+pub const COLS: usize = 358; // base province grid; island-rich regions get finer provinces (see DETAIL)
+pub const ROWS: usize = 146;
+pub const CELL: f32 = 11.4; // width of a normal province in map tiles
+
+// regions with finer provinces: (lon0, lat0, lon1, lat1, spacing factor)
+pub const DETAIL: &[(f32, f32, f32, f32, f32)] = &[
+    (116.5, 4.5, 127.5, 21.5, 0.38), // Philippines
+    (129.5, 30.0, 146.0, 46.0, 0.5), // Japan
+    (94.0, -11.5, 141.5, 8.0, 0.55), // Indonesia and Malaysia
+    (-6.0, 34.0, 30.0, 46.0, 0.6),   // Mediterranean
+    (-86.0, 17.0, -59.0, 27.0, 0.55), // Caribbean
+    (-11.0, 49.0, 2.0, 61.0, 0.6),   // British Isles
+];
+pub const HOP_DEG: f32 = 1.5; // islands of an archipelago group closer than this are linked by land
 
 pub const SPEEDS: [f32; 4] = [1.0, 2.0, 4.0, 8.0];
 
@@ -42,7 +53,7 @@ pub const FERRIES: &[((f32, f32), (f32, f32))] = &[
 
 // thin isthmuses that are too narrow for the province grid: link the two provinces by land (lon,lat)
 pub const LINKS: &[((f32, f32), (f32, f32))] = &[
-    ((-79.3, 9.4), (-78.2, 8.8)), // Panama
+    ((-80.7, 8.5), (-78.7, 8.8)), // Panama
 ];
 
 // narrow straits inside one landmass (lon,lat segments): provinces on opposite sides are not land-linked

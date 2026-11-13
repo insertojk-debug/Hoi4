@@ -10,6 +10,7 @@ pub struct Prov {
     pub owner: usize,
     pub sea: bool,
     pub coast: bool,
+    pub sp: f32, // width of this province in map tiles (finer in the detail regions)
     pub bb: (usize, usize, usize, usize), // bounding box in tiles
     pub adj: Vec<usize>,                  // land borders
     pub nadj: Vec<usize>,                 // neighbouring water provinces (for ships and for coastal land)

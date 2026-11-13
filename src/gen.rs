@@ -55,6 +55,24 @@ fn cut_regions(provs: &mut Vec<Prov>, region: &[u16]) {
     }
 }
 
+// islands of the same archipelago group that lie close together are linked by land,
+// so the Philippines and Japan play as connected island chains instead of a tangle of sea lanes
+fn hop_link(provs: &mut Vec<Prov>, grp: &[u8], region: &[u16]) {
+    let hop = HOP_DEG * (MW as f32 / 350.0);
+    for g in 1..=3u8 {
+        let list: Vec<usize> = (0..provs.len()).filter(|&i| !provs[i].sea && grp[i] == g).collect();
+        for x in 0..list.len() {
+            for y in (x + 1)..list.len() {
+                let (a, b) = (list[x], list[y]);
+                if region[a] != region[b] && provs[a].pos.distance(provs[b].pos) < hop && !provs[a].adj.contains(&b) {
+                    provs[a].adj.push(b);
+                    provs[b].adj.push(a);
+                }
+            }
+        }
+    }
+}
+
 // continent id per province (usize::MAX for sea) and number of continents
 pub fn components(provs: &[Prov]) -> (Vec<usize>, usize) {
     let mut comp = vec![usize::MAX; provs.len()];
@@ -96,59 +114,98 @@ fn nearest_land(provs: &[Prov], t: Vec2, skip: &[usize]) -> usize {
 
 impl Game {
     pub fn new() -> Game {
-        let (cols, rows) = (COLS, ROWS);
         rand::srand(11);
         let mut provs: Vec<Prov> = Vec::new();
-        let cw = MW as f32 / cols as f32;
-        let ch = MH as f32 / rows as f32;
-        for r in 0..rows {
-            for c in 0..cols {
+        let (cw, ch) = (MW as f32 / COLS as f32, MH as f32 / ROWS as f32);
+        // detail boxes in map tiles
+        let boxes: Vec<(Vec2, Vec2, f32)> = DETAIL
+            .iter()
+            .map(|&(lo0, la0, lo1, la1, f)| (vec2(proj(lo0, la1).x, proj(lo0, la1).y), vec2(proj(lo1, la0).x, proj(lo1, la0).y), f))
+            .collect();
+        let new_prov = |pos: Vec2, sp: f32| Prov { pos, owner: NEUTRAL, sea: true, coast: false, sp, bb: (MW, MH, 0, 0), adj: vec![], nadj: vec![], ladj: vec![], sea_adj: vec![] };
+        // normal seeds on a jittered grid, except inside detail boxes
+        for r in 0..ROWS {
+            for c in 0..COLS {
                 let x = (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * cw;
                 let y = (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * ch;
-                provs.push(Prov { pos: vec2(x, y), owner: NEUTRAL, sea: true, coast: false, bb: (MW, MH, 0, 0), adj: vec![], nadj: vec![], ladj: vec![], sea_adj: vec![] });
+                let p = vec2(x, y);
+                if boxes.iter().any(|b| p.x >= b.0.x && p.x <= b.1.x && p.y >= b.0.y && p.y <= b.1.y) {
+                    continue;
+                }
+                provs.push(new_prov(p, cw));
             }
         }
-        // land = a province whose centre (and mostly its surroundings) is on real land
+        // finer seeds inside the detail boxes
+        for &(lo, hi, f) in &boxes {
+            let s = cw * f;
+            let (nx, ny) = (((hi.x - lo.x) / s).ceil() as usize, ((hi.y - lo.y) / s).ceil() as usize);
+            for r in 0..ny {
+                for c in 0..nx {
+                    let x = (lo.x + (c as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * s).clamp(lo.x, hi.x);
+                    let y = (lo.y + (r as f32 + 0.5 + rand::gen_range(-0.3f32, 0.3f32)) * s).clamp(lo.y, hi.y);
+                    provs.push(new_prov(vec2(x, y), s));
+                }
+            }
+        }
+        assert!(provs.len() < 65000, "too many provinces for u16 tiles");
+        // land = a province whose surroundings are mostly real land (nine samples)
         let world = geo::build();
-        let o = cw * 0.3;
-        let offs = [vec2(0.0, 0.0), vec2(-o, -o), vec2(o, -o), vec2(-o, o), vec2(o, o)];
         let mut region = vec![0u16; provs.len()];
+        let mut grp = vec![0u8; provs.len()];
         for (idx, p) in provs.iter_mut().enumerate() {
+            let o = p.sp * 0.32;
             let mut regs: Vec<u16> = Vec::new();
-            for off in offs {
+            for k in 0..9 {
+                let off = if k == 0 { vec2(0.0, 0.0) } else { let a = k as f32 * std::f32::consts::FRAC_PI_4; vec2(a.cos() * o, a.sin() * o) };
                 let (is_land, r) = world.at(p.pos + off);
                 if is_land {
                     regs.push(r);
                 }
             }
-            if regs.len() >= 2 {
+            if regs.len() >= 4 {
                 p.sea = false;
                 // the landmass most of its samples belong to
                 region[idx] = *regs.iter().max_by_key(|&&r| regs.iter().filter(|&&q| q == r).count()).unwrap();
+                grp[idx] = world.group(region[idx]);
             }
         }
-        // pixel -> province lookup (seeds are a jittered grid, so only nearby cells matter)
+        // pixel -> province lookup using buckets of seeds
+        const B: f32 = 12.0;
+        let (bnx, bny) = ((MW as f32 / B) as usize + 1, (MH as f32 / B) as usize + 1);
+        let mut bucket: Vec<Vec<u32>> = vec![vec![]; bnx * bny];
+        for (i, p) in provs.iter().enumerate() {
+            bucket[(p.pos.y / B) as usize * bnx + (p.pos.x / B) as usize].push(i as u32);
+        }
         let mut tile = vec![0u16; MW * MH];
         for y in 0..MH {
+            let by = (y as f32 / B) as i32;
             for x in 0..MW {
                 let p = vec2(x as f32 + 0.5, y as f32 + 0.5);
-                let cx = (x as f32 / cw) as i32;
-                let cy = (y as f32 / ch) as i32;
-                let mut best = 0;
-                let mut bd = f32::MAX;
-                for dy in -2..=2i32 {
-                    for dx in -2..=2i32 {
-                        let (c, r) = (cx + dx, cy + dy);
-                        if c < 0 || r < 0 || c >= cols as i32 || r >= rows as i32 {
-                            continue;
-                        }
-                        let i = r as usize * cols + c as usize;
-                        let d = provs[i].pos.distance_squared(p);
-                        if d < bd {
-                            bd = d;
-                            best = i;
+                let bx = (x as f32 / B) as i32;
+                let mut best = 0usize;
+                let mut rad = 1i32;
+                loop {
+                    let mut bd = f32::MAX;
+                    for dy in -rad..=rad {
+                        for dx in -rad..=rad {
+                            let (cx, cy) = (bx + dx, by + dy);
+                            if cx < 0 || cy < 0 || cx >= bnx as i32 || cy >= bny as i32 {
+                                continue;
+                            }
+                            for &i in &bucket[cy as usize * bnx + cx as usize] {
+                                let d = provs[i as usize].pos.distance_squared(p);
+                                if d < bd {
+                                    bd = d;
+                                    best = i as usize;
+                                }
+                            }
                         }
                     }
+                    // a nearer seed outside the searched block is impossible when bd is within its reach
+                    if bd <= (B * rad as f32) * (B * rad as f32) || rad >= 4 {
+                        break;
+                    }
+                    rad += 1;
                 }
                 tile[y * MW + x] = best as u16;
                 let b = &mut provs[best].bb;
@@ -160,6 +217,7 @@ impl Game {
         }
         build_adj(&mut provs, &tile);
         cut_regions(&mut provs, &region);
+        hop_link(&mut provs, &grp, &region);
         // drop single-province islands
         let (comp, nc) = components(&provs);
         let mut sizes = vec![0usize; nc];
@@ -175,6 +233,7 @@ impl Game {
         }
         build_adj(&mut provs, &tile);
         cut_regions(&mut provs, &region);
+        hop_link(&mut provs, &grp, &region);
         for &((lo1, la1), (lo2, la2)) in LINKS {
             let a = nearest_land(&provs, proj(lo1, la1), &[]);
             let b = nearest_land(&provs, proj(lo2, la2), &[]);
@@ -210,11 +269,11 @@ impl Game {
         pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap());
         let mut group: Vec<usize> = (0..nc).collect();
         let mut deg = vec![0usize; nc];
-        for (d, a, b) in pairs {
+        for (_d, a, b) in pairs {
             let (ca, cb) = (comp[a], comp[b]);
             let (ga, gb) = (group[ca], group[cb]);
             let tree_edge = ga != gb;
-            let extra = d < 0.02 * MW as f32 && deg[ca] < 3 && deg[cb] < 3;
+            let extra = false; // only the minimum number of lanes that connects the world
             if tree_edge || extra {
                 if tree_edge {
                     for g in group.iter_mut() {
