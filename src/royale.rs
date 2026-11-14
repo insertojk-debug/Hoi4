@@ -120,6 +120,24 @@ pub fn release(g: &mut Game, p: usize, d: usize) {
     }
 }
 
+// how likely a spot is to get a bot: crowded in Europe, Asia and the Middle East, thin elsewhere
+fn region_weight(lon: f32, lat: f32) -> f32 {
+    let mut w = 1.0f32;
+    if lat > 60.0 && lon < -20.0 {
+        w = 0.3; // Greenland and the Canadian Arctic
+    }
+    if (-11.0..=45.0).contains(&lon) && (35.0..=72.0).contains(&lat) {
+        w = w.max(4.0); // Europe
+    }
+    if (25.0..=65.0).contains(&lon) && (12.0..=42.0).contains(&lat) {
+        w = w.max(4.0); // Middle East
+    }
+    if (60.0..=150.0).contains(&lon) && (-10.0..=55.0).contains(&lat) {
+        w = w.max(3.5); // South, East and South-East Asia
+    }
+    w
+}
+
 // start a fresh Territory Royale on the existing world map: all land is free, 500 bots pick spawn points
 pub fn init(g: &mut Game) {
     g.armies.clear();
@@ -168,14 +186,21 @@ pub fn init(g: &mut Game) {
     }
     r.alive = PLAYERS - 1;
     g.roy = r;
-    // shuffle the land and give the first 500 provinces to the bots
-    for k in (1..land.len()).rev() {
-        let j = rand::gen_range(0, k + 1);
-        land.swap(k, j);
-    }
+    // the bots start mostly in Europe, Asia and the Middle East: pick 500 provinces, weighted by region
+    let mut keyed: Vec<(f32, usize)> = land
+        .iter()
+        .map(|&p| {
+            let pos = g.provs[p].pos;
+            let w = region_weight(pos.x / MW as f32 * 350.0 - 170.0, 84.0 - pos.y / MH as f32 * 142.0);
+            let u = rand::gen_range(0.0001f32, 1.0);
+            (u.ln() / w, p) // weighted sampling without replacement
+        })
+        .collect();
+    keyed.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     for b in 0..(PLAYERS - 1) {
-        claim(g, land[b], b + 1);
-        g.roy.players[b + 1].capital = land[b];
+        let p = keyed[b].1;
+        claim(g, p, b + 1);
+        g.roy.players[b + 1].capital = p;
     }
     stats(g);
     g.recolor_all();
